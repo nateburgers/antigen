@@ -20,8 +20,20 @@ get url = do
   contents <- runMaybeT $ openURL url
   return $ readString [withParseHTML yes, withWarnings no] (fromMaybe "" contents)
 
-scrape url = runX . xshow =<< get url
---scrape' url query = runX . xshow =<< (get url) >>> query
-scrape' url = do
+css :: ArrowXml a => String -> a XmlTree XmlTree
+css = multi . hasName
+
+scrape url = do
   page <- get url
-  return $ runX $ page /> getText
+  runX $ page >>> css "td" >>> css "a" >>> getAttrValue "href"
+
+compact :: [Maybe a] -> [a]
+compact = foldr compact' []
+    where compact' Nothing xs = xs
+          compact' (Just x) xs = x:xs
+
+--main :: IO [Package] -- old main
+main = do
+  packages <- scrape rtemsRoot
+  return . compact $ map readVersionLink packages
+

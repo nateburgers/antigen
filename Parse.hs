@@ -1,5 +1,6 @@
 module Parse where
 import Text.ParserCombinators.Parsec
+import Control.Applicative hiding ((<|>))
 
 data Title = Title String
 data Version = Version [Int]
@@ -40,6 +41,9 @@ dash = char '-'
 
 dot :: GenParser Char st Char
 dot = char '.'
+
+slash :: GenParser Char st Char
+slash = char '/'
 
 titleLetter :: GenParser Char st Char
 titleLetter = oneOf $ "+"++['a'..'z']++['A'..'Z']
@@ -86,19 +90,24 @@ packageParser = do
   tar <- tarParser
   return $ Source title version tar
 
+versionLinkParser :: GenParser Char st Version
+versionLinkParser = versionParser <* slash
+
 strCat = foldr (++) []
 readInt :: String -> Int
 readInt = read
 
 parse' p = parse p "error"
-parseTitle = parse' titleParser
-parseVersion = parse' versionParser
-parsePackage = parse' packageParser
-
-packageTest = "gcc-g++-4.1123.2.2342.2.tar.gz"
-testP = parsePackage packageTest
+readParser p s = case parse' p s of
+                    Left x -> Nothing
+                    Right x -> Just x
 
 readPackage :: String -> Maybe Package
-readPackage s = case parsePackage s of
-                  Left x -> Nothing
-                  Right x -> Just x
+readPackage = readParser packageParser
+
+readVersionLink :: String -> Maybe Version
+readVersionLink = readParser versionLinkParser
+
+packageTest = "gcc-g++-4.1123.2.2342.2.tar.gz"
+testP = readPackage packageTest
+
