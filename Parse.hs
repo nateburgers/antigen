@@ -1,12 +1,5 @@
 module Parse where
 import Text.ParserCombinators.Parsec
-import Text.XML.HXT.Core
-import Data.Maybe
-import Control.Monad
-import Control.Monad.Trans
-import Control.Monad.Maybe
-import Network.HTTP
-import Network.URI
 
 data Title = Title String
 data Version = Version [Int]
