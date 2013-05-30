@@ -10,7 +10,15 @@ import Network.URI
 
 
 rtemsRoot = "http://www.rtems.com/ftp/pub/rtems/SOURCES/"
-            
+
+rtemsPage :: String -> String
+rtemsPage s = rtemsRoot ++ s ++ "/"
+
+-- this produces wrong urls
+rtemsRoute :: [String] -> String
+rtemsRoute = foldl addDir rtemsRoot
+    where addDir x xs = x ++ "/" ++ xs
+
 openURL :: String -> MaybeT IO String
 openURL url = case parseURI url of
                 Nothing -> fail "could not read URI"
@@ -34,6 +42,9 @@ compact = foldr compact' []
 
 --main :: IO [Package] -- old main
 main = do
-  packages <- scrape rtemsRoot
-  return . compact $ map readVersionLink packages
+  links <- scrape rtemsRoot
+  packageLinks <- mapM (scrape . rtemsPage . show) $ versionLinksFor links
+  return $ map packagesFor packageLinks
+      where versionLinksFor xs = compact $ map readVersionLink xs
+            packagesFor links = compact $ map readPackage links
 
