@@ -12,10 +12,10 @@ import Control.Applicative hiding ((<|>))
 import Network.HTTP
 import Network.URI
 
-type Title = String
-type Version = [Int]
-type BuildDate = [Int]
-data TarFormat = BZ2 | GZ | XZ | RAW
+data Title = Title String
+data Version = Version [Int]
+data BuildDate = BuildDate [Int] deriving Show
+data TarFormat = BZ2 | GZ | XZ
 data Package = Source Title Version TarFormat
              | Diff Title Version BuildDate
                deriving Show
@@ -23,15 +23,23 @@ data Package = Source Title Version TarFormat
 -- helpers
 class Token a where
     tokenize :: a -> String
+    genParser :: a -> GenParser Char st a
+    genParser t = (string $ tokenize t) >> return t
 
 instance Token TarFormat where
     tokenize GZ = "gz"
     tokenize XZ = "xz"
     tokenize BZ2 = "bz2"
-    tokenize RAW = ""
 
 instance Show TarFormat where
-    show = tokenize
+    show t = ".tar." ++ tokenize t
+
+instance Show Version where
+    show (Version v) = foldr accumShow "" v
+        where accumShow x xs = (show x)++xs
+
+instance Show Title where
+    show (Title t) = t
 
 -- real parsing
 dash :: GenParser Char st Char
@@ -59,7 +67,7 @@ titleParser :: GenParser Char st Title
 titleParser = do
   head <- titleHead
   tail <- many1 $ try titleTail
-  return $ strCat $ head:tail
+  return $ Title $ strCat $ head:tail
 
 versionHead = digits
 versionTail = dot >> digits
@@ -68,23 +76,15 @@ versionParser :: GenParser Char st Version
 versionParser = do
   head <- versionHead
   tail <- many1 $ try versionTail
-  return $ map readInt $ head:tail
-
-parseToken :: Token a => a -> GenParser Char st String
-parseToken = string . tokenize
+  return $ Version $ map readInt $ head:tail
 
 tarHead = string "tar"
-tarTail = parseToken GZ <|>
-          parseToken XZ <|>
-          parseToken BZ2
+tarTail = genParser GZ <|>
+          genParser XZ <|>
+          genParser BZ2
 
-parseTar :: GenParser Char st String
-parseTar = do
-  dot
-  tarHead
-  dot
-  tail <- tarTail
-  return $ tail
+parseTar :: GenParser Char st TarFormat
+parseTar = dot >> tarHead >> dot >> tarTail
 
 packageParser = do
   title <- titleParser
