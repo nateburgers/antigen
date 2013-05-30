@@ -35,6 +35,11 @@ instance Show Package where
     show (Source t v f) = (show t) ++ "-" ++ (show v) ++ "." ++ (show f)
     show (Diff t v b) = "diff"
 
+instance Eq Package where
+    (==) (Source (Title ta) _ _) (Source (Title tb) _ _) = ta == tb
+instance Ord Package where
+    (<=) (Source _ (Version va) _) (Source _ (Version vb) _) = va <= vb
+
 -- real parsing
 dash :: GenParser Char st Char
 dash = char '-'
@@ -60,11 +65,18 @@ titleTail = do
   tail <- letters
   return $ head:tail        
 
-titleParser :: GenParser Char st Title
-titleParser = do
+multiTitleParser :: GenParser Char st Title
+multiTitleParser = do
   head <- titleHead
   tail <- many1 $ try titleTail
   return $ Title $ strCat $ head:tail
+
+unitTitleParser :: GenParser Char st Title
+unitTitleParser = titleHead >>= return . Title
+
+titleParser :: GenParser Char st Title
+titleParser = try multiTitleParser <|>
+              unitTitleParser
 
 versionHead = digits
 versionTail = dot >> digits

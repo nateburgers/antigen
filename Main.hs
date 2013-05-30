@@ -1,6 +1,7 @@
 module Main where
 import Parse
 import Text.XML.HXT.Core
+import Data.List
 import Data.Maybe
 import Control.Monad
 import Control.Monad.Trans
@@ -40,11 +41,18 @@ compact = foldr compact' []
     where compact' Nothing xs = xs
           compact' (Just x) xs = x:xs
 
+compactMap :: (a -> Maybe b) -> [a] -> [b]
+compactMap f xs = compact $ map f xs
+
+extractVersionLinks = compactMap readVersionLink
+extractPackages = compactMap readPackage
+
+maxOfGroups :: Ord a => [a] -> [a]
+maxOfGroups xs = map maximum $ group xs
+
 --main :: IO [Package] -- old main
 main = do
   links <- scrape rtemsRoot
-  packageLinks <- mapM (scrape . rtemsPage . show) $ versionLinksFor links
-  return $ map packagesFor packageLinks
-      where versionLinksFor xs = compact $ map readVersionLink xs
-            packagesFor links = compact $ map readPackage links
+  packageLinks <- mapM (scrape . rtemsPage . show) $ extractVersionLinks links
+  return $ map (maxOfGroups . extractPackages) packageLinks
 
