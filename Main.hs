@@ -18,7 +18,6 @@ data BuildDate = BuildDate [Int] deriving Show
 data TarFormat = BZ2 | GZ | XZ
 data Package = Source Title Version TarFormat
              | Diff Title Version BuildDate
-               deriving Show
 
 -- helpers
 class Token a where
@@ -36,10 +35,15 @@ instance Show TarFormat where
 
 instance Show Version where
     show (Version v) = foldr accumShow "" v
-        where accumShow x xs = (show x)++xs
+        where accumShow x "" = show x
+              accumShow x xs = (show x)++"."++xs
 
 instance Show Title where
     show (Title t) = t
+
+instance Show Package where
+    show (Source t v f) = (show t) ++ "-" ++ (show v) ++ (show f)
+    show (Diff t v b) = "diff"
 
 -- real parsing
 dash :: GenParser Char st Char
@@ -83,70 +87,26 @@ tarTail = genParser GZ <|>
           genParser XZ <|>
           genParser BZ2
 
-parseTar :: GenParser Char st TarFormat
-parseTar = dot >> tarHead >> dot >> tarTail
+tarParser :: GenParser Char st TarFormat
+tarParser = dot >> tarHead >> dot >> tarTail
 
 packageParser = do
   title <- titleParser
   dash
   version <- versionParser
-  tar <- parseTar
-  return (title, version, tar)
+  tar <- tarParser
+  return $ Source title version tar
 
 strCat = foldr (++) []
 readInt :: String -> Int
 readInt = read
 
 parse' p = parse p "error"
-parseT = parse' titleParser
-parseV = parse' versionParser
 
-testT = parseT "some-title-dude-man-bro"
-testV = parseV "1231.132.123.12333.3.3.3.3"
-testP = parse' packageParser "gcc-g++-4.1.2.2.2.tar.gz"
+parseTitle = parse' titleParser
+parseVersion = parse' versionParser
+parsePackage = parse' packageParser
 
---
+packageTest = "gcc-g++-4.1123.2.2342.2.tar.gz"
 
--- titleRegex = "([a-zA-Z+]+-)+([a-zA-Z])*"
--- versionRegex = "([0-9]+.)*([0-9]+.)"
--- tarRegex = "(.tar.gz|.tar.xz|.tar.bz2)"
--- buildDateRegex = "" -- TODO: start work here tomorrow
--- diffRegex = ".diff"
-
--- isDiff :: String -> Bool
--- isDiff s = s =~ diffRegex :: Bool
-
--- trimRegexMatch :: String -> String -> String
--- trimRegexMatch r s = init ( s =~ r :: String)
-
--- matchTitle :: String -> String
--- matchTitle = trimRegexMatch titleRegex
-
--- matchVersion :: String -> String             
--- matchVersion = trimRegexMatch versionRegex
-
--- matchTar :: String -> String
--- matchTar s = s =~ tarRegex :: String
-
--- readTitle :: String -> Title
--- readTitle = matchTitle
-
--- readVersion :: String -> Version
--- readVersion s = map rd $ splitOn "." $ matchVersion s :: Version
---     where rd = read :: String -> Int
-
--- readTar :: String -> TarFormat
--- readTar = makeTar . matchTar
---     where makeTar ".tar.bz2" = BZ2
---           makeTar ".tar.gz" = GZ
---           makeTar ".tar.xz" = XZ
---           makeTar _ = RAW
-            
--- readPackage :: String -> Package
--- readPackage s = if isDiff s
---                 then Source (readTitle s) (readVersion s) (readTar s)
---                 else Diff (readTitle s) (readVersion s) [12345567]
-
--- testPackage = "gcc-g++-1.2.2.2.3.tar.gz"
--- test = readPackage testPackage
-
+testP = parsePackage packageTest
