@@ -1,13 +1,14 @@
 module Parse where
 import Text.ParserCombinators.Parsec
 import Control.Applicative hiding ((<|>))
+import Data.Char
 
 data Title = Title String
 data Version = Version [Int]
-data BuildDate = BuildDate [Int] deriving Show
+data BuildDate = BuildDate [Int]
 data TarFormat = BZ2 | GZ | XZ
 data Package = Source Title Version TarFormat
-             | Diff Title Version BuildDate
+             | Diff Title Version Version BuildDate
 
 -- helpers
 class Token a where
@@ -28,12 +29,17 @@ instance Show Version where
         where accumShow x "" = show x
               accumShow x xs = (show x) ++ "." ++ xs
 
+instance Show BuildDate where
+    show (BuildDate ds) = foldr accumShow "" ds
+      where accumShow x xs = (show x) ++ xs
+
 instance Show Title where
     show (Title t) = t
 
 instance Show Package where
     show (Source t v f) = (show t) ++ "-" ++ (show v) ++ "." ++ (show f)
-    show (Diff t v b) = "diff"
+    show (Diff t v rv b) = (show t) ++ "-" ++ (show v) ++ "-rtems" ++ 
+                           (show rv) ++ "-" ++ (show b) ++ ".diff"
 
 instance Eq Package where
     (==) (Source (Title ta) _ _) (Source (Title tb) _ _) = ta == tb
@@ -87,6 +93,12 @@ versionParser = do
   tail <- many1 $ try versionTail
   return $ Version $ map readInt $ head:tail
 
+rtemsVersionParser :: GenParser Char st Version
+rtemsVersionParser = string "rtems" >> versionParser
+
+buildDateParser :: GenParser Char st BuildDate
+buildDateParser = count 8 digit >>= return . BuildDate . map digitToInt
+
 tarHead = string "tar"
 tarTail = genParser GZ <|>
           genParser XZ <|>
@@ -97,10 +109,23 @@ tarParser = dot >> tarHead >> dot >> tarTail
 
 packageParser = do
   title <- titleParser
-  dash
+  _ <- dash
   version <- versionParser
   tar <- tarParser
   return $ Source title version tar
+
+diffParser :: GenParser Char st Package
+diffParser = do
+  title <- titleParser
+  _ <- dash
+  version <- versionParser
+  _ <- dash
+  rtemsVersion <- rtemsVersionParser
+  _ <- dash
+  date <- buildDateParser
+  _ <- dot
+  _ <- string "diff"
+  return $ Diff title version rtemsVersion date
 
 versionLinkParser :: GenParser Char st Version
 versionLinkParser = versionParser <* slash
@@ -117,9 +142,13 @@ readParser p s = case parse' p s of
 readPackage :: String -> Maybe Package
 readPackage = readParser packageParser
 
+readDiff :: String -> Maybe Package
+readDiff = readParser diffParser
+
 readVersionLink :: String -> Maybe Version
 readVersionLink = readParser versionLinkParser
 
 packageTest = "gcc-g++-4.1123.2.2342.2.tar.gz"
+diffTest = "gcc-g++-4.5.4-rtems4.11-20120703.diff"
 testP = readPackage packageTest
-
+testD = readDiff diffTest
