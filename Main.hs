@@ -1,4 +1,5 @@
 module Main where
+import Data
 import Parse
 import Text.XML.HXT.Core
 import Data.List
@@ -46,13 +47,28 @@ compactMap f xs = compact $ map f xs
 
 extractVersionLinks = compactMap readVersionLink
 extractPackages = compactMap readPackage
+extractDiffs = compactMap readDiff
+extractRepoConfigurations = compactMap readRepoConf
 
 maxOfGroups :: Ord a => [a] -> [a]
 maxOfGroups xs = map maximum $ group xs
+
+maxOfJustGroups :: Ord b => (a -> Maybe b) -> [a] -> [b]
+maxOfJustGroups f = maxOfGroups . compactMap f
+
+packagesWithDiffs :: [Package] -> [Package] -> [(Package, Package)]
+packagesWithDiffs sources diffs = map (findAssoc diffs) sources
+    where findAssoc diffs source = head $ filter (diffMatches source) diffs
+          diffMatches (Source (Title sourceTitle) _ _) (Diff (Title diffTitle) _ _ _) =
+              sourceTitle == diffTitle
 
 --main :: IO [Package] -- old main
 main = do
   links <- scrape rtemsRoot
   packageLinks <- mapM (scrape . rtemsPage . show) $ extractVersionLinks links
-  return $ map (maxOfGroups . extractPackages) packageLinks
+  return $ packagesWithDiffs (first $ map (maxOfJustGroups readPackage) packageLinks) (first $ map (maxOfJustGroups readDiff) packageLinks)
+  -- return $ [ map (maxOfJustGroups readPackage) packageLinks
+  --          , map (maxOfJustGroups readDiff) packageLinks
+  --          , map (maxOfJustGroups readRepoConf) packageLinks
+  --          ]
 

@@ -1,54 +1,8 @@
 module Parse where
+import Data
 import Text.ParserCombinators.Parsec
 import Control.Applicative hiding ((<|>))
 import Data.Char
-
-data Title = Title String
-data Version = Version [Int]
-data BuildDate = BuildDate [Int]
-data TarFormat = BZ2 | GZ | XZ
-data Package = Source Title Version TarFormat
-             | Diff Title Version Version BuildDate
-             | RepoConf Version BuildDate Version TarFormat
-
--- helpers
-class Token a where
-    tokenize :: a -> String
-    genParser :: a -> GenParser Char st a
-    genParser t = (string $ tokenize t) >> return t
-
-instance Token TarFormat where
-    tokenize GZ = "gz"
-    tokenize XZ = "xz"
-    tokenize BZ2 = "bz2"
-
-instance Show TarFormat where
-    show t = "tar." ++ tokenize t
-
-instance Show Version where
-    show (Version v) = foldr accumShow "" v
-        where accumShow x "" = show x
-              accumShow x xs = (show x) ++ "." ++ xs
-
-instance Show BuildDate where
-    show (BuildDate ds) = foldr accumShow "" ds
-      where accumShow x xs = (show x) ++ xs
-
-instance Show Title where
-    show (Title t) = t
-
-instance Show Package where
-    show (Source t v f) = foldCat [show t, "-", show v, ".", show f]
-    show (Diff t v rv b) = foldCat [show t, "-", show v, "-rtems", show rv, "-", show b, ".diff"]
-    show (RepoConf v b bv t) = foldCat ["rtems-", show v, "-repo-conf-0.", show b, ".", show bv, show t]
-
-instance Eq Package where
-    (==) (Source (Title ta) _ _) (Source (Title tb) _ _) = ta == tb
-instance Ord Package where
-    (<=) (Source _ (Version va) _) (Source _ (Version vb) _) = va <= vb
-
-foldCat :: [String] -> String
-foldCat = foldr (++) ""
 
 -- real parsing
 dash :: GenParser Char st Char
@@ -143,9 +97,10 @@ repoConfParser = do
   rtemsVersion <- versionParser
   _ <- string "-repo-conf-0."
   buildDate <- buildDateParser
-  buildVersion <- unitVersionParser
+  _ <- dot
+  buildVersion <- digit
   tarFormat <- tarParser
-  return $ RepoConf rtemsVersion buildDate buildVersion tarFormat
+  return $ RepoConf rtemsVersion buildDate (Version [digitToInt buildVersion]) tarFormat
 
 versionLinkParser :: GenParser Char st Version
 versionLinkParser = versionParser <* slash
@@ -170,8 +125,6 @@ readRepoConf = readParser repoConfParser
 
 readVersionLink :: String -> Maybe Version
 readVersionLink = readParser versionLinkParser
-
-testR' = parse' repoConfParser repoTest
 
 packageTest = "binutils-2.21.1.tar.bz2"
 diffTest = "gcc-g++-4.5.4-rtems4.11-20120703.diff"
