@@ -9,6 +9,7 @@ data BuildDate = BuildDate [Int]
 data TarFormat = BZ2 | GZ | XZ
 data Package = Source Title Version TarFormat
              | Diff Title Version Version BuildDate
+             | RepoConf Version BuildDate Version TarFormat
 
 -- helpers
 class Token a where
@@ -37,14 +38,17 @@ instance Show Title where
     show (Title t) = t
 
 instance Show Package where
-    show (Source t v f) = (show t) ++ "-" ++ (show v) ++ "." ++ (show f)
-    show (Diff t v rv b) = (show t) ++ "-" ++ (show v) ++ "-rtems" ++ 
-                           (show rv) ++ "-" ++ (show b) ++ ".diff"
+    show (Source t v f) = foldCat [show t, "-", show v, ".", show f]
+    show (Diff t v rv b) = foldCat [show t, "-", show v, "-rtems", show rv, "-", show b, ".diff"]
+    show (RepoConf v b bv t) = foldCat ["rtems-", show v, "-repo-conf-0.", show b, ".", show bv, show t]
 
 instance Eq Package where
     (==) (Source (Title ta) _ _) (Source (Title tb) _ _) = ta == tb
 instance Ord Package where
     (<=) (Source _ (Version va) _) (Source _ (Version vb) _) = va <= vb
+
+foldCat :: [String] -> String
+foldCat = foldr (++) ""
 
 -- real parsing
 dash :: GenParser Char st Char
@@ -87,12 +91,18 @@ titleParser = try multiTitleParser <|>
 versionHead = digits
 versionTail = dot >> digits
 
-versionParser :: GenParser Char st Version
-versionParser = do
+multiVersionParser :: GenParser Char st Version
+multiVersionParser = do
   head <- versionHead
   tail <- many1 $ try versionTail
   return $ Version $ map readInt $ head:tail
 
+unitVersionParser :: GenParser Char st Version
+unitVersionParser = versionHead >>= return . Version . map digitToInt
+
+versionParser = try multiVersionParser <|>
+                unitVersionParser
+                    
 rtemsVersionParser :: GenParser Char st Version
 rtemsVersionParser = string "rtems" >> versionParser
 
@@ -127,6 +137,16 @@ diffParser = do
   _ <- string "diff"
   return $ Diff title version rtemsVersion date
 
+repoConfParser :: GenParser Char st Package
+repoConfParser = do
+  _ <- string "rtems-"
+  rtemsVersion <- versionParser
+  _ <- string "-repo-conf-0."
+  buildDate <- buildDateParser
+  buildVersion <- unitVersionParser
+  tarFormat <- tarParser
+  return $ RepoConf rtemsVersion buildDate buildVersion tarFormat
+
 versionLinkParser :: GenParser Char st Version
 versionLinkParser = versionParser <* slash
 
@@ -145,10 +165,17 @@ readPackage = readParser packageParser
 readDiff :: String -> Maybe Package
 readDiff = readParser diffParser
 
+readRepoConf :: String -> Maybe Package
+readRepoConf = readParser repoConfParser
+
 readVersionLink :: String -> Maybe Version
 readVersionLink = readParser versionLinkParser
 
-packageTest = "gcc-g++-4.1123.2.2342.2.tar.gz"
+testR' = parse' repoConfParser repoTest
+
+packageTest = "binutils-2.21.1.tar.bz2"
 diffTest = "gcc-g++-4.5.4-rtems4.11-20120703.diff"
+repoTest = "rtems-4.11-repo-conf-0.20130311.0.tar.xz"
 testP = readPackage packageTest
 testD = readDiff diffTest
+testR = readRepoConf repoTest
