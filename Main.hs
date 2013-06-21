@@ -21,11 +21,8 @@ rtemsRoot = "http://www.rtems.com/ftp/pub/rtems/SOURCES"
 
 rtemsPage :: String -> String
 rtemsPage s = rtemsRoot ++ "/" ++ s ++ "/"
---rtemsPage s = intercalate "/" [rtemsRoot, s]
 
 rtemsRoute :: [String] -> String -- Technically produces incorrect urls
--- rtemsRoute = foldl' addDir rtemsRoot
---     where addDir x xs = x ++ xs ++ "/"
 rtemsRoute subdirs = intercalate "/" (rtemsRoot:subdirs)
 
 openURL :: String -> MaybeT IO String
@@ -91,23 +88,38 @@ packageRoute :: Version -> Package -> String
 packageRoute v p = rtemsRoute [show v, show p]
 
 -- Build System
--- packageRules :: Package -> Rules ()
--- packageRules p = do
---   want [show p]
+pathFor :: [FilePath] -> FilePath
+pathFor = intercalate "/"
 
--- wildFormat :: TarFormat -> String
--- wildFormat f = "*." ++ (show f)
+buildPath :: Version -> FilePath -> FilePath
+buildPath v f = pathFor ["build", show v, f]
+
+packageBuildPath :: Version -> Package -> FilePath
+packageBuildPath v p = buildPath v $ show p
 
 curlPackageRule :: Version -> Package -> Rules ()
-curlPackageRule v p = (show p) *> curlPackage
-    where curlPackage name = system' "curl" ["-o", name, packageRoute v p]
+curlPackageRule v p = (buildPath v $ show p) *> curlPackage
+    where curlPackage name = do
+            need [pathFor ["build", show v]]
+            system' "curl" ["-o", name, packageRoute v p]
+
+mkDirRule :: FilePath -> Rules ()
+mkDirRule d = d *> mkdir
+    where mkdir d = system' "mkdir" ["-p", d]
+mkDirRules :: [FilePath] -> Rules ()
+mkDirRules ds = forM_ ds mkDirRule
+
+packageDir :: Version -> Package -> FilePath
+packageDir v p = pathFor ["build", show v] -- START WORK HERE
 
 shakeIt :: RtemsConf -> IO ()
 shakeIt conf = shakeArgs shakeOptions $ do
-                 forM_ (confSources conf) $ curlPackageRule $ version conf
-                 forM_ (confDiffs conf) $ curlPackageRule $ version conf
-                 want $ map show $ confSources conf
-                 want $ map show $ confDiffs conf
+                 let v = version conf
+                 mkDirRules [pathFor ["build", show v]]
+                 forM_ (confSources conf) $ curlPackageRule v
+                 forM_ (confDiffs conf) $ curlPackageRule v
+                 want $ map (packageBuildPath v) $ confSources conf
+                 want $ map (packageBuildPath v) $ confDiffs conf
 
 scrapeRtemsRepo :: IO [RtemsConf]
 scrapeRtemsRepo = do
