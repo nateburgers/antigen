@@ -9,15 +9,18 @@ import Control.Monad.Trans
 import Control.Monad.Maybe
 import Network.HTTP
 import Network.URI
-
+--import Development.Shake
+import Shelly
+import Debug.Trace              -- get rid of this
+import qualified Data.Text as T
+default (T.Text)
 
 rtemsRoot = "http://www.rtems.com/ftp/pub/rtems/SOURCES/"
 
 rtemsPage :: String -> String
 rtemsPage s = rtemsRoot ++ s ++ "/"
 
--- this produces wrong urls
-rtemsRoute :: [String] -> String
+rtemsRoute :: [String] -> String -- Technically produces incorrect urls
 rtemsRoute = foldl addDir rtemsRoot
     where addDir x xs = x ++ "/" ++ xs
 
@@ -56,19 +59,57 @@ maxOfGroups xs = map maximum $ group xs
 maxOfJustGroups :: Ord b => (a -> Maybe b) -> [a] -> [b]
 maxOfJustGroups f = maxOfGroups . compactMap f
 
-packagesWithDiffs :: [Package] -> [Package] -> [(Package, Package)]
+maybeHead :: [a] -> Maybe a
+maybeHead (x:_) = Just x
+maybeHead [] = Nothing
+
+-- takes in a list of sources and a list of diffs and returns list of a source and maybe diff
+packagesWithDiffs :: [Package] -> [Package] -> [(Package, Maybe Package)]
 packagesWithDiffs sources diffs = map (findAssoc diffs) sources
-    where findAssoc diffs source = head $ filter (diffMatches source) diffs
+    where findAssoc diffs source = (source, maybeHead $ filter (diffMatches source) diffs)
           diffMatches (Source (Title sourceTitle) _ _) (Diff (Title diffTitle) _ _ _) =
               sourceTitle == diffTitle
+          diffMatches _ _ = False
 
---main :: IO [Package] -- old main
-main = do
+data RtemsConf = RtemsConf
+               { version :: Version
+               , packages :: [(Package, Maybe Package)]
+               } deriving Show
+
+-- Build System
+-- packageRules :: Package -> Rules ()
+-- packageRules p = do
+--   want [show p]
+
+-- wildFormat :: TarFormat -> String
+-- wildFormat f = "*." ++ (show f)
+
+-- curlRule :: String -> Action ()
+-- curlRule out = system' "curl" [out]
+
+-- tarRules :: Rules ()
+-- tarRules = do
+--   (wildFormat GZ) *> curlRule
+--   (wildFormat XZ) *> curlRule
+--   (wildFormat BZ2) *> curlRule
+
+-- shakeIt :: RtemsConf -> IO ()
+-- shakeIt conf = shakeArgs shakeOptions $ do
+
+-- Shelly shell generation
+
+
+scrapeRtemsConf :: IO [RtemsConf]
+scrapeRtemsConf = do
   links <- scrape rtemsRoot
-  packageLinks <- mapM (scrape . rtemsPage . show) $ extractVersionLinks links
-  return $ packagesWithDiffs (first $ map (maxOfJustGroups readPackage) packageLinks) (first $ map (maxOfJustGroups readDiff) packageLinks)
-  -- return $ [ map (maxOfJustGroups readPackage) packageLinks
-  --          , map (maxOfJustGroups readDiff) packageLinks
-  --          , map (maxOfJustGroups readRepoConf) packageLinks
-  --          ]
+  let versions = extractVersionLinks links
+  packageLinks <- mapM (scrape . rtemsPage . show) versions 
+  let sources = map (maxOfJustGroups readPackage) packageLinks
+      diffs = map (maxOfJustGroups readDiff) packageLinks
+      confs = map (maxOfJustGroups readRepoConf) packageLinks
+      system = zipWith RtemsConf versions $ zipWith packagesWithDiffs sources diffs
+  return $ system
 
+main = shakeArgs shakeOptions $ do
+         tarRules
+         
