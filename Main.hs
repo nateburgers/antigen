@@ -12,10 +12,6 @@ import Control.Monad.Maybe
 import Network.HTTP
 import Network.URI
 import Development.Shake
---import Shelly hiding (get)
-import Debug.Trace              -- get rid of this
--- import qualified Data.Text as T
--- default (T.Text)
 
 rtemsRoot = "http://www.rtems.com/ftp/pub/rtems/SOURCES"
 
@@ -94,14 +90,32 @@ pathFor = intercalate "/"
 buildPath :: Version -> FilePath -> FilePath
 buildPath v f = pathFor ["build", show v, f]
 
+-- getting the sources from the repo
 packageBuildPath :: Version -> Package -> FilePath
 packageBuildPath v p = buildPath v $ show p
 
+untar :: Package -> String
+untar (Source _ _ GZ) = "-xzf"
+untar (Source _ _ XZ) = "-xzf"
+untar (Source _ _ BZ2) = "-xjf"
+
 curlPackageRule :: Version -> Package -> Rules ()
-curlPackageRule v p = (buildPath v $ show p) *> curlPackage
+curlPackageRule v p = (packageBuildPath v p) *> curlPackage
     where curlPackage name = do
             need [pathFor ["build", show v]]
             system' "curl" ["-o", name, packageRoute v p]
+            system' "tar" [untar p, packageBuildPath v p]
+
+patchPackageRule :: Version -> (Package, Maybe Package) -> Rules ()
+patchPackageRule v (p, d) = (packageBuildPath v p) *> curlPackage
+    where curlPackage name = do
+            need [pathFor ["build", show v]]
+            system' "curl" ["-o", name, packageRoute v p]
+            system' "tar" [untar p, packageBuildPath v p]
+            case d of
+              Nothing -> return ()
+              Just diff ->
+                  system' "patch <" [packageBuildPath v diff]
 
 mkDirRule :: FilePath -> Rules ()
 mkDirRule d = d *> mkdir
@@ -115,11 +129,13 @@ packageDir v p = pathFor ["build", show v] -- START WORK HERE
 shakeIt :: RtemsConf -> IO ()
 shakeIt conf = shakeArgs shakeOptions $ do
                  let v = version conf
+                     sources = confSources conf
+                     diffs = confDiffs conf
                  mkDirRules [pathFor ["build", show v]]
-                 forM_ (confSources conf) $ curlPackageRule v
-                 forM_ (confDiffs conf) $ curlPackageRule v
-                 want $ map (packageBuildPath v) $ confSources conf
-                 want $ map (packageBuildPath v) $ confDiffs conf
+                 forM_ sources $ curlPackageRule v
+                 forM_ diffs $ curlPackageRule v
+                 want $ map (packageBuildPath v) diffs
+                 want $ map (packageBuildPath v) sources
 
 scrapeRtemsRepo :: IO [RtemsConf]
 scrapeRtemsRepo = do

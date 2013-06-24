@@ -9,6 +9,11 @@ data Package = Source Title Version TarFormat
              | Diff Title Version Version BuildDate
              | RepoConf Version BuildDate Version TarFormat
 
+packageFolderName :: Package -> String
+packageFolderName (Source t v tar) = foldCat [show t, "-", show v]
+packageFolderName (RepoConf v b bv t) = foldCat ["rtems-", show v, "-repo-conf-0.", show b, ".", show bv]
+packageFolderName _ = ""
+
 class Token a where
     tokenize :: a -> String
     genParser :: a -> GenParser Char st a
