@@ -94,28 +94,35 @@ buildPath v f = pathFor ["build", show v, f]
 packageBuildPath :: Version -> Package -> FilePath
 packageBuildPath v p = buildPath v $ show p
 
+packageBuildDir :: Version -> Package -> FilePath
+packageBuildDir v p = buildPath v $ packageFolderName p
+
 untar :: Package -> String
-untar (Source _ _ GZ) = "-xzf"
-untar (Source _ _ XZ) = "-xzf"
-untar (Source _ _ BZ2) = "-xjf"
+untar (Source _ _ GZ) = "-xf"
+untar (Source _ _ XZ) = "-xf"
+untar (Source _ _ BZ2) = "-xf"
+untar _ = error "Untaring something that it shouldn't"
 
 curlPackageRule :: Version -> Package -> Rules ()
 curlPackageRule v p = (packageBuildPath v p) *> curlPackage
     where curlPackage name = do
             need [pathFor ["build", show v]]
             system' "curl" ["-o", name, packageRoute v p]
-            system' "tar" [untar p, packageBuildPath v p]
 
 patchPackageRule :: Version -> (Package, Maybe Package) -> Rules ()
 patchPackageRule v (p, d) = (packageBuildPath v p) *> curlPackage
     where curlPackage name = do
-            need [pathFor ["build", show v]]
-            system' "curl" ["-o", name, packageRoute v p]
-            system' "tar" [untar p, packageBuildPath v p]
+            case d of
+              Nothing ->
+                  need [pathFor ["build", show v]]
+              Just diff ->
+                  need [ pathFor ["build", show v]
+                       , packageBuildPath v diff]
+            system' "curl" ["-o", name, packageBuildPath v p]
             case d of
               Nothing -> return ()
               Just diff ->
-                  system' "patch <" [packageBuildPath v diff]
+                  system' "patch" [packageBuildDir v p, packageBuildPath v diff]
 
 mkDirRule :: FilePath -> Rules ()
 mkDirRule d = d *> mkdir
@@ -133,6 +140,7 @@ shakeIt conf = shakeArgs shakeOptions $ do
                      diffs = confDiffs conf
                  mkDirRules [pathFor ["build", show v]]
                  forM_ sources $ curlPackageRule v
+                 --forM_ (packages conf) $ patchPackageRule v
                  forM_ diffs $ curlPackageRule v
                  want $ map (packageBuildPath v) diffs
                  want $ map (packageBuildPath v) sources
