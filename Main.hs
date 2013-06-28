@@ -118,12 +118,10 @@ patchPackageRule v (p, d) = (packageBuildPath v p) *> curlPackage
               Nothing -> do
                      need [buildDir]
                      curl >> untar
-                     putLoud $ "not patching "++show p
                      return ()
               Just diff -> do
                      need [buildDir, packageBuildPath v diff]
                      curl >> untar
-                     putLoud $ "patching "++patchFilePath
                      systemCwd packageDir "patch" ["-i", patchFilePath, "-p1"]
                          where patchFilePath = pathFor ["..", show diff]
 
@@ -145,7 +143,6 @@ shakeIt conf = shakeArgs shakeOptions $ do
                  mkDirRules [pathFor ["build", show v]]
                  forM_ packagesWithPatches $ patchPackageRule v
                  forM_ diffs $ curlPackageRule v
-                 --want $ map (packageBuildPath v) diffs
                  want $ map (packageBuildPath v) sources
 
 scrapeRtemsRepo :: IO [RtemsConf]
