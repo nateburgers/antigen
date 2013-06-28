@@ -64,8 +64,9 @@ maybeHead [] = Nothing
 packagesWithDiffs :: [Package] -> [Package] -> [(Package, Maybe Package)]
 packagesWithDiffs sources diffs = map (findAssoc diffs) sources
     where findAssoc diffs source = (source, maybeHead $ filter (diffMatches source) diffs)
-          diffMatches (Source (Title sourceTitle) _ _) (Diff (Title diffTitle) _ _ _) =
-              sourceTitle == diffTitle
+          diffMatches (Source (Title sourceTitle) (Version sourceVersion) _)
+                          (Diff (Title diffTitle) (Version diffVersion) _ _) =
+              sourceTitle == diffTitle && sourceVersion == diffVersion
           diffMatches _ _ = False
 
 -- Shelly script generation
@@ -90,18 +91,15 @@ pathFor = intercalate "/"
 buildPath :: Version -> FilePath -> FilePath
 buildPath v f = pathFor ["build", show v, f]
 
+quote :: String -> String
+quote s = "\"" ++ s ++ "\""
+
 -- getting the sources from the repo
 packageBuildPath :: Version -> Package -> FilePath
 packageBuildPath v p = buildPath v $ show p
 
 packageBuildDir :: Version -> Package -> FilePath
 packageBuildDir v p = buildPath v $ packageFolderName p
-
-untar :: Package -> String
-untar (Source _ _ GZ) = "-xf"
-untar (Source _ _ XZ) = "-xf"
-untar (Source _ _ BZ2) = "-xf"
-untar _ = error "Untaring something that it shouldn't"
 
 curlPackageRule :: Version -> Package -> Rules ()
 curlPackageRule v p = (packageBuildPath v p) *> curlPackage
@@ -112,17 +110,22 @@ curlPackageRule v p = (packageBuildPath v p) *> curlPackage
 patchPackageRule :: Version -> (Package, Maybe Package) -> Rules ()
 patchPackageRule v (p, d) = (packageBuildPath v p) *> curlPackage
     where curlPackage name = do
+            let buildDir = pathFor ["build", show v]
+                packageDir = packageBuildDir v p
+                curl = system' "curl" ["-o", name, packageRoute v p]
+                untar = systemCwd buildDir "tar" ["-xf", show p]
             case d of
-              Nothing ->
-                  need [pathFor ["build", show v]]
-              Just diff ->
-                  need [ pathFor ["build", show v]
-                       , packageBuildPath v diff]
-            system' "curl" ["-o", name, packageBuildPath v p]
-            case d of
-              Nothing -> return ()
-              Just diff ->
-                  system' "patch" [packageBuildDir v p, packageBuildPath v diff]
+              Nothing -> do
+                     need [buildDir]
+                     curl >> untar
+                     putLoud $ "not patching "++show p
+                     return ()
+              Just diff -> do
+                     need [buildDir, packageBuildPath v diff]
+                     curl >> untar
+                     putLoud $ "patching "++patchFilePath
+                     systemCwd packageDir "patch" ["-i", patchFilePath, "-p1"]
+                         where patchFilePath = pathFor ["..", show diff]
 
 mkDirRule :: FilePath -> Rules ()
 mkDirRule d = d *> mkdir
@@ -138,11 +141,11 @@ shakeIt conf = shakeArgs shakeOptions $ do
                  let v = version conf
                      sources = confSources conf
                      diffs = confDiffs conf
+                     packagesWithPatches = packages conf
                  mkDirRules [pathFor ["build", show v]]
-                 forM_ sources $ curlPackageRule v
-                 --forM_ (packages conf) $ patchPackageRule v
+                 forM_ packagesWithPatches $ patchPackageRule v
                  forM_ diffs $ curlPackageRule v
-                 want $ map (packageBuildPath v) diffs
+                 --want $ map (packageBuildPath v) diffs
                  want $ map (packageBuildPath v) sources
 
 scrapeRtemsRepo :: IO [RtemsConf]
