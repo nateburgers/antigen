@@ -140,36 +140,28 @@ compileRule :: Version -> Package -> [ConfigureOption] -> Rules ()
 compileRule v p cs = packageProduct v p *> compile
     where systemPD = systemCwd $ packageBuildDir v p
           compile _ = do
-            systemPD "./configure" cs
+            systemPD "./configure" $ cs ++ [ "--target", target
+                                           , "--prefix", prefix]
             systemPD "make" ["all"]
             systemPD "make" ["info"]
             systemPD "sudo" ["make", "install"]
 
+gdbRule :: Version -> Package -> Rules ()
+gdbRule v p = compileRule v p []
+
 binutilsRule :: Version -> Package -> Rules ()
-binutilsRule v p = compileRule v p
-                   [ "--target", target]
-                   [ "--prefix", prefix]
--- binutilsRule v p = packageProduct v p *> compile
---     where compile _ = do
---             let folder = packageBuildDir v p
---                 systemPD = systemCwd folder
---             systemPD "./configure" [ "--target", target
---                                    , "--prefix", prefix]
---             systemPD "make" ["all"]
---             systemPD "make" ["info"]
---             systemPD "sudo" ["make", "install"]
+binutilsRule v p = compileRule v p []
 
 gccRule :: Version -> Package -> Rules ()
 gccRule v p = compileRule v p
               [ "--build", "i386-pc-linux-gnu"
               , "--host", "i386-pc-linux-gnu"
-              , "--target", target
               , "--with-gnu-as", "/home/nate/rtems/bin/"++target++"-as"
               , "--with-gnu-ld", "/home/nate/rtems/bin/"++target++"-ld"
               , "--verbose"
               , "--enable-threads"
-              , "--enable-languages=c,c++"
-              , "--prefix", prefix]
+              , "--enable-languages=c,c++"]
+
 -- gccRule v p = packageProduct v p *> compile
 --     where compile _ = do
 --             let folder = packageBuildDir v p
@@ -210,6 +202,7 @@ shakeIt conf = shakeArgs shakeOptions $ do
                      packagesWithPatches = packages conf
                      binutils = findPackage conf "binutils"
                      gcc = findPackage conf "gcc"
+                     gdb = findPackage conf "gdb"
                  mkDirRules [pathFor ["build", show v]]
                  forM_ packagesWithPatches $ patchPackageRule v
                  forM_ diffs $ curlPackageRule v
@@ -217,6 +210,7 @@ shakeIt conf = shakeArgs shakeOptions $ do
                  -- individual package rules
                  binutilsRule v binutils >> want [packageProduct v binutils]
                  gccRule v gcc >> want [packageProduct v gcc]
+                 gdbRule v gdb >> want [packageProduct v gdb]
 scrapeRtemsRepo :: IO [RtemsConf]
 scrapeRtemsRepo = do
   links <- scrape $ rtemsPage "/"
