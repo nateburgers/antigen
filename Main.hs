@@ -125,6 +125,68 @@ patchPackageRule v (p, d) = (packageBuildPath v p) *> curlPackage
                      systemCwd packageDir "patch" ["-i", patchFilePath, "-p1"]
                          where patchFilePath = pathFor ["..", show diff]
 
+-- may crash if not found, should return a maybe
+findPackage :: RtemsConf -> String -> Package
+findPackage conf title = grabPackage $ head $ filter matchBinutils $ packages conf
+    where matchBinutils ((Source (Title title') _ _), _) = title' == title
+          grabPackage (p, d) = p
+
+-- these should be config options
+target = "powerpc-rtems4.11"
+prefix = "/home/nate/rtems"
+
+type ConfigureOption = String
+compileRule :: Version -> Package -> [ConfigureOption] -> Rules ()
+compileRule v p cs = packageProduct v p *> compile
+    where systemPD = systemCwd $ packageBuildDir v p
+          compile _ = do
+            systemPD "./configure" cs
+            systemPD "make" ["all"]
+            systemPD "make" ["info"]
+            systemPD "sudo" ["make", "install"]
+
+binutilsRule :: Version -> Package -> Rules ()
+binutilsRule v p = compileRule v p
+                   [ "--target", target]
+                   [ "--prefix", prefix]
+-- binutilsRule v p = packageProduct v p *> compile
+--     where compile _ = do
+--             let folder = packageBuildDir v p
+--                 systemPD = systemCwd folder
+--             systemPD "./configure" [ "--target", target
+--                                    , "--prefix", prefix]
+--             systemPD "make" ["all"]
+--             systemPD "make" ["info"]
+--             systemPD "sudo" ["make", "install"]
+
+gccRule :: Version -> Package -> Rules ()
+gccRule v p = compileRule v p
+              [ "--build", "i386-pc-linux-gnu"
+              , "--host", "i386-pc-linux-gnu"
+              , "--target", target
+              , "--with-gnu-as", "/home/nate/rtems/bin/"++target++"-as"
+              , "--with-gnu-ld", "/home/nate/rtems/bin/"++target++"-ld"
+              , "--verbose"
+              , "--enable-threads"
+              , "--enable-languages=c,c++"
+              , "--prefix", prefix]
+-- gccRule v p = packageProduct v p *> compile
+--     where compile _ = do
+--             let folder = packageBuildDir v p
+--                 systemPD = systemCwd folder
+--             systemPD "./configure" [ "--build", "i386-pc-linux-gnu"
+--                                    , "--host", "i386-pc-linux-gnu"
+--                                    , "--target", target
+--                                    , "--with-gnu-as", "/home/nate/rtems/bin/"++target++"-as"
+--                                    , "--with-gnu-ld", "/home/nate/rtems/bin/"++target++"-ld"
+--                                    , "--verbose"
+--                                    , "--enable-threads"
+--                                    , "--enable-languages=c,c++"
+--                                    , "--prefix", prefix]
+--             systemPD "make" ["all"]
+--             systemPD "make" ["info"]
+--             systemPD "sudo" ["make", "install"]
+
 mkDirRule :: FilePath -> Rules ()
 mkDirRule d = d *> mkdir
     where mkdir d = system' "mkdir" ["-p", d]
@@ -134,17 +196,27 @@ mkDirRules ds = forM_ ds mkDirRule
 packageDir :: Version -> Package -> FilePath
 packageDir v p = pathFor ["build", show v] -- START WORK HERE
 
+packageProduct :: Version -> Package -> FilePath
+packageProduct v p = pathFor [packageBuildDir v p, title p]
+    where title (Source (Title t) _ _) = t
+          title (Diff (Title t) _ _ _) = t
+          title (RepoConf _ _ _ _) = "rtems"
+
 shakeIt :: RtemsConf -> IO ()
 shakeIt conf = shakeArgs shakeOptions $ do
                  let v = version conf
                      sources = confSources conf
                      diffs = confDiffs conf
                      packagesWithPatches = packages conf
+                     binutils = findPackage conf "binutils"
+                     gcc = findPackage conf "gcc"
                  mkDirRules [pathFor ["build", show v]]
                  forM_ packagesWithPatches $ patchPackageRule v
                  forM_ diffs $ curlPackageRule v
                  want $ map (packageBuildPath v) sources
-
+                 -- individual package rules
+                 binutilsRule v binutils >> want [packageProduct v binutils]
+                 gccRule v gcc >> want [packageProduct v gcc]
 scrapeRtemsRepo :: IO [RtemsConf]
 scrapeRtemsRepo = do
   links <- scrape $ rtemsPage "/"
