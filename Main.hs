@@ -192,7 +192,6 @@ packageProduct v p = pathFor [packageBuildDir v p, title p]
 shakeIt :: RtemsConf -> IO ()
 shakeIt conf = shakeArgs shakeOptions $ do
                  let v = version conf
---                     sources = confSources conf
                      diffs = confDiffs conf
                      packagesWithPatches = packages conf
                      binutils = findPackage conf "binutils"
