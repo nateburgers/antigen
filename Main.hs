@@ -3,7 +3,7 @@
 module Main where
 import Data
 import Parse
-import Text.XML.HXT.Core
+import Text.XML.HXT.Core hiding (trace)
 import Data.List
 import Data.Maybe
 import Control.Monad
@@ -12,6 +12,7 @@ import Control.Monad.Maybe
 import Network.HTTP
 import Network.URI
 import Development.Shake
+import Debug.Trace
 
 rtemsRoot = "http://www.rtems.com/ftp/pub/rtems/SOURCES"
 
@@ -126,20 +127,29 @@ patchPackageRule v (p, d) = (packageBuildPath v p) *> curlPackage
                          where patchFilePath = pathFor ["..", show diff]
 
 -- may crash if not found, should return a maybe
-findPackage :: RtemsConf -> String -> Package
+type PackageTitle = String
+findPackage :: RtemsConf -> PackageTitle -> Package
 findPackage conf title = grabPackage $ head $ filter matchBinutils $ packages conf
     where matchBinutils ((Source (Title title') _ _), _) = title' == title
           grabPackage (p, d) = p
 
 -- these should be config options
-target = "powerpc-rtems4.11"
-prefix = "/home/nate/rtems"
+target  = "powerpc-rtems4.11"
+prefix  = "/home/nate/rtems"
+gccHost = "x86_64-unknown-linux-gnu/4.8.1"
 
 type ConfigureOption = String
 compileRule :: Version -> Package -> [ConfigureOption] -> Rules ()
 compileRule v p cs = packageProduct v p *> compile
     where systemPD = systemCwd $ packageBuildDir v p
+          systemIberty = systemCwd $ pathFor [packageBuildDir v p, "libiberty"]
           compile _ = do
+            need [packageBuildPath v p]
+            path <- getEnv "PATH"
+            traced "looking up PATH for" $ do
+                        case path of
+                          Nothing -> putStrLn "Nothing"
+                          Just s -> putStrLn s
             systemPD "./configure" $ cs ++ [ "--target", target
                                            , "--prefix", prefix]
             systemPD "make" ["all"]
@@ -154,30 +164,15 @@ binutilsRule v p = compileRule v p []
 
 gccRule :: Version -> Package -> Rules ()
 gccRule v p = compileRule v p
-              [ "--build", "i386-pc-linux-gnu"
-              , "--host", "i386-pc-linux-gnu"
-              , "--with-gnu-as", "/home/nate/rtems/bin/"++target++"-as"
-              , "--with-gnu-ld", "/home/nate/rtems/bin/"++target++"-ld"
+              [ "--build", gccHost
+              , "--host",  gccHost
+              , "--with-gnu-as", prefix++"/bin/"++target++"-as"
+              , "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
+              , "--with-ar", prefix++"/bin/"++target++"-ar"
               , "--verbose"
               , "--enable-threads"
-              , "--enable-languages=c,c++"]
-
--- gccRule v p = packageProduct v p *> compile
---     where compile _ = do
---             let folder = packageBuildDir v p
---                 systemPD = systemCwd folder
---             systemPD "./configure" [ "--build", "i386-pc-linux-gnu"
---                                    , "--host", "i386-pc-linux-gnu"
---                                    , "--target", target
---                                    , "--with-gnu-as", "/home/nate/rtems/bin/"++target++"-as"
---                                    , "--with-gnu-ld", "/home/nate/rtems/bin/"++target++"-ld"
---                                    , "--verbose"
---                                    , "--enable-threads"
---                                    , "--enable-languages=c,c++"
---                                    , "--prefix", prefix]
---             systemPD "make" ["all"]
---             systemPD "make" ["info"]
---             systemPD "sudo" ["make", "install"]
+              , "--disable-install-libiberty"
+              , "--enable-languages=c"]
 
 mkDirRule :: FilePath -> Rules ()
 mkDirRule d = d *> mkdir
@@ -197,7 +192,7 @@ packageProduct v p = pathFor [packageBuildDir v p, title p]
 shakeIt :: RtemsConf -> IO ()
 shakeIt conf = shakeArgs shakeOptions $ do
                  let v = version conf
-                     sources = confSources conf
+--                     sources = confSources conf
                      diffs = confDiffs conf
                      packagesWithPatches = packages conf
                      binutils = findPackage conf "binutils"
@@ -206,23 +201,36 @@ shakeIt conf = shakeArgs shakeOptions $ do
                  mkDirRules [pathFor ["build", show v]]
                  forM_ packagesWithPatches $ patchPackageRule v
                  forM_ diffs $ curlPackageRule v
-                 want $ map (packageBuildPath v) sources
                  -- individual package rules
                  binutilsRule v binutils >> want [packageProduct v binutils]
                  gccRule v gcc >> want [packageProduct v gcc]
                  gdbRule v gdb >> want [packageProduct v gdb]
+
+pairSourceWithDiff :: [Package] -> Package -> (Package, Maybe Package)
+pairSourceWithDiff diffs source  = (source, maybeHead $ filter (match source) diffs)
+    where match :: Package -> Package -> Bool
+          match (Source (Title ts) (Version vs) _)
+                    (Diff (Title td) (Version vd) _ _) = ts == td && vs == vd
+          match _ _ = False
+
+scrapeRtemsVersion :: Version -> IO RtemsConf
+scrapeRtemsVersion v = do
+  packageLinks <- scrape . rtemsPage . show $ v
+  let sources = maxOfJustGroups readPackage packageLinks
+      diffs = compactMap readDiff packageLinks
+      pairs = map (pairSourceWithDiff diffs) sources
+  return $ RtemsConf v pairs
+
 scrapeRtemsRepo :: IO [RtemsConf]
 scrapeRtemsRepo = do
   links <- scrape $ rtemsPage "/"
   let versions = extractVersionLinks links
-  packageLinks <- mapM (scrape . rtemsPage . show) versions 
-  let sources = map (maxOfJustGroups readPackage) packageLinks
-      diffs = map (maxOfJustGroups readDiff) packageLinks
-      confs = map (maxOfJustGroups readRepoConf) packageLinks
-      configuration = zipWith RtemsConf versions $ zipWith packagesWithDiffs sources diffs
-  return $ configuration
+  mapM scrapeRtemsVersion versions
          
-main = shakeIt . last =<< scrapeRtemsRepo
+traceShow' :: Show a => a -> a
+traceShow' a = traceShow a a
+
+main = shakeIt . traceShow' . last =<< scrapeRtemsRepo
 main' = do
   configurations <- scrapeRtemsRepo
   forM_ configurations shakeIt
