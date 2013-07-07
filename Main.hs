@@ -90,46 +90,57 @@ quote s = "\"" ++ s ++ "\""
 packageBuildPath :: Version -> Package -> FilePath
 packageBuildPath v p = buildPath v $ show p
 
+buildDir v = pathFor ["build", v]
 packageBuildDir :: Version -> Package -> FilePath
 packageBuildDir v p = buildPath v $ packageFolderName p
 
-packageConfigurePath :: Version -> Package -> FilePath
-packageConfigurePath v p = pathFor [packageBuildDir v p, "configure"]
+-- packageConfigurePath :: Version -> Package -> FilePath
+-- packageConfigurePath v p = pathFor [packageBuildDir v p, "configure"]
 
+tarPackagePath v p = buildPath v $ show p
 curlPackageRule :: Version -> Package -> Rules ()
-curlPackageRule v p = (packageBuildPath v p) *> curlPackage
+curlPackageRule v p = (tarPackagePath v p) *> curlPackage
     where curlPackage name = do
             need [pathFor ["build", show v]]
             system' "curl" ["-o", name, packageRoute v p]
 
-patchPackageRule :: Version -> (Package, Maybe Package) -> Rules ()
-patchPackageRule v (p, d) = (packageConfigurePath v p) *> curlPackage
-    where curlPackage _ = do
-            let buildDir = pathFor ["build", show v]
-                packageDir = packageBuildDir v p
-                curl = system' "curl" ["-o", packageBuildPath v p
-                                      , packageRoute v p]
-                untar = systemCwd buildDir "tar" ["-xf", show p]
-            case d of
-              Nothing -> do
-                     need [buildDir]
-                     curl >> untar
-                     return ()
-              Just diff -> do
-                     need [buildDir, packageBuildPath v diff]
-                     curl >> untar
-                     systemCwd packageDir "patch" ["-i", patchFilePath, "-p1"]
-                         where patchFilePath = pathFor ["..", show diff]
+configurePackagePath v p = pathFor [packageBuildDir v p, "configure"]
+untarPackageRule :: Version -> Package -> Rules ()
+untarPackageRule v p = (configurePackagePath v p) *> \name -> do
+                         need [packageBuildPath v p]
+                         command_ [Cwd $ buildDir v] "tar" ["-xf", show p]
 
--- may crash if not found, should return a maybe
-type PackageTitle = String
-findPackage :: RtemsConf -> PackageTitle -> Package
-findPackage conf title = grabPackage $ head $ filter matchBinutils $ packages conf
-    where matchBinutils ((Source (Title title') _ _), _) = title' == title
-          grabPackage (p, d) = p
+changelistPackagePath v p = pathFor [packageBuildDir v p, "Changelist.rtems"]
+patchPackageRule :: Version -> (Package, Maybe Package) -> Rules ()
+patchPackageRule v (p, Nothing) = (changelistPackagePath v p) *> \name -> do
+                                    need [configurePackagePath v p]
+                                    command_ [Cwd $ buildDir] "touch" ["Changelog.rtems"]
+patchPackageRule v (p, Just diff) = (changelistPackagePath v p) *> \name -> do
+                                      need [ configurePackagePath v p
+                                           , packageBuildPath v diff]
+                                      command_ [Cwd $ packageBuildDir v p] "patch" ["-i", patchFilePath, "-p1"]
+-- patchPackageRule v (p, d) = (changelistPackagePath v p) *> curlPackage
+--     where curlPackage _ = do
+--             let buildDir = pathFor ["build", show v]
+--                 packageDir = packageBuildDir v p
+--                 curl = system' "curl" ["-o", packageBuildPath v p
+--                                       , packageRoute v p]
+--                 untar = systemCwd buildDir "tar" ["-xf", show p]
+--             case d of
+--               Nothing -> do
+--                      need [buildDir, packageBuildPath v p]
+--                      --curl >> untar
+--                      untar
+--                      return ()
+--               Just diff -> do
+--                      need [ buildDir, packageBuildPath v diff
+--                           , packageBuildPath v p]
+--                      untar
+--                      systemCwd packageDir "patch" ["-i", patchFilePath, "-p1"]
+--                          where patchFilePath = pathFor ["..", show diff]
 
 -- these should be config options
-target  = "powerpc-rtems4.11"
+target  = "powerpc-rtems4.11-rtems"
 prefix  = "/home/nate/rtems"
 gccHost = "x86_64-unknown-linux-gnu/4.8.1"
 
@@ -143,8 +154,9 @@ compileRule v p cs = do
       configureScriptPath = "../" ++ (packageFolderName p) ++ "/configure"
   need [packageConfigurePath v p]
   system' "mkdir" ["-p", buildDir]
-  systemPD configureScriptPath $ cs ++ [ "--target", target
-                                       , "--prefix", prefix]
+  -- systemPD configureScriptPath $ cs ++ [ "--target", target
+  --                                      , "--prefix", prefix]
+  systemPD configureScriptPath cs
   systemPD "printenv" []
   systemPD "make" ["all"]
   systemPD "make" ["info"]
@@ -152,10 +164,14 @@ compileRule v p cs = do
 
 gmpRule :: Version -> Package -> Rules ()
 gmpRule v p = (packageProduct v p) *> \name -> do
-                compileRule v p [ "--enable-shared"
+                compileRule v p [ "--build", gccHost
+                                , "--host", target
+--                                , "--target", target
+                                , "--enable-shared"
                                 , "--enable-static"
                                 , "--enable-fft"
-                                , "--enable-cxx"]
+--                                , "--enable-cxx"
+                                , "CC", "gcc"]
 
 mpfrRule :: Version -> Package -> Rules ()
 mpfrRule v p = (packageProduct v p) *> \name -> do
@@ -189,6 +205,8 @@ gccRule :: Version -> Package -> Rules ()
 gccRule v p = (packageProduct v p) *> \name -> do
                 compileRule v p [ "--build", gccHost
                                 , "--host",  gccHost
+                                , "--target", target
+                                , "--prefix", prefix
                                 , "--with-gnu-as", prefix++"/bin/"++target++"-as"
                                 , "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
 --                                , "--with-ar", prefix++"/bin/"++target++"-ar"
@@ -198,15 +216,16 @@ gccRule v p = (packageProduct v p) *> \name -> do
                                 , "--disable-shared"
                                 , "--enable-static"
                                 , "--enable-ld"
-                                , "--with-gmp", prefix
-                                , "--with-mpc", prefix
-                                , "--with-mpfr", prefix
+                                -- , "--with-gmp", prefix
+                                -- , "--with-mpc", prefix
+                                -- , "--with-mpfr", prefix
 --                                , "--disable-libssp"
                                 , "--disable-nls"
                                 , "--disable-libgomp"
 --                                , "--enable-multilib"
 --                                , "--enable-threads"
-                                , "--enable-languages=c"]
+                                , "--enable-languages=c"
+                                , "CPP=\"gcc -E\""]
 
 mkDirRule :: FilePath -> Rules ()
 mkDirRule d = d *> mkdir
@@ -222,6 +241,13 @@ packageProduct v p = pathFor [packageBuildDir v p, title p]
     where title (Source (Title t) _ _) = t
           title (Diff (Title t) _ _ _) = t
           title (RepoConf _ _ _ _) = "rtems"
+
+-- may crash if not found, should return a maybe
+type PackageTitle = String
+findPackage :: RtemsConf -> PackageTitle -> Package
+findPackage conf title = grabPackage $ head $ filter matchBinutils $ packages conf
+    where matchBinutils ((Source (Title title') _ _), _) = title' == title
+          grabPackage (p, d) = p
 
 shakeIt :: RtemsConf -> IO ()
 shakeIt conf = shakeArgs shakeOptions $ do
@@ -241,9 +267,9 @@ shakeIt conf = shakeArgs shakeOptions $ do
                  -- individual package rules
 --                 newlibRule v newlib >> want [packageProduct v newlib]
                  gccRule v gcc >> want [packageProduct v gcc]
-                 gmpRule v gmp >> want [packageProduct v gmp]
-                 mpfrRule v mpfr >> want [packageProduct v mpfr]
-                 mpcRule v mpc >> want [packageProduct v mpc]
+                 -- mpcRule v mpc >> want [packageProduct v mpc]
+                 -- mpfrRule v mpfr >> want [packageProduct v mpfr]
+                 -- gmpRule v gmp >> want [packageProduct v gmp]
 --                 binutilsRule v binutils >> want [packageProduct v binutils]
 --                 gdbRule v gdb >> want [packageProduct v gdb]
 
