@@ -61,15 +61,6 @@ maybeHead :: [a] -> Maybe a
 maybeHead (x:_) = Just x
 maybeHead [] = Nothing
 
--- takes in a list of sources and a list of diffs and returns list of a source and maybe diff
-packagesWithDiffs :: [Package] -> [Package] -> [(Package, Maybe Package)]
-packagesWithDiffs sources diffs = map (findAssoc diffs) sources
-    where findAssoc diffs source = (source, maybeHead $ filter (diffMatches source) diffs)
-          diffMatches (Source (Title sourceTitle) (Version sourceVersion) _)
-                          (Diff (Title diffTitle) (Version diffVersion) _ _) =
-              sourceTitle == diffTitle && sourceVersion == diffVersion
-          diffMatches _ _ = False
-
 -- Shelly script generation
 data RtemsConf = RtemsConf
                { version :: Version
@@ -102,6 +93,9 @@ packageBuildPath v p = buildPath v $ show p
 packageBuildDir :: Version -> Package -> FilePath
 packageBuildDir v p = buildPath v $ packageFolderName p
 
+packageConfigurePath :: Version -> Package -> FilePath
+packageConfigurePath v p = pathFor [packageBuildDir v p, "configure"]
+
 curlPackageRule :: Version -> Package -> Rules ()
 curlPackageRule v p = (packageBuildPath v p) *> curlPackage
     where curlPackage name = do
@@ -109,11 +103,12 @@ curlPackageRule v p = (packageBuildPath v p) *> curlPackage
             system' "curl" ["-o", name, packageRoute v p]
 
 patchPackageRule :: Version -> (Package, Maybe Package) -> Rules ()
-patchPackageRule v (p, d) = (packageBuildPath v p) *> curlPackage
-    where curlPackage name = do
+patchPackageRule v (p, d) = (packageConfigurePath v p) *> curlPackage
+    where curlPackage _ = do
             let buildDir = pathFor ["build", show v]
                 packageDir = packageBuildDir v p
-                curl = system' "curl" ["-o", name, packageRoute v p]
+                curl = system' "curl" ["-o", packageBuildPath v p
+                                      , packageRoute v p]
                 untar = systemCwd buildDir "tar" ["-xf", show p]
             case d of
               Nothing -> do
@@ -139,40 +134,79 @@ prefix  = "/home/nate/rtems"
 gccHost = "x86_64-unknown-linux-gnu/4.8.1"
 
 type ConfigureOption = String
-compileRule :: Version -> Package -> [ConfigureOption] -> Rules ()
-compileRule v p cs = packageProduct v p *> compile
-    where systemPD = systemCwd $ packageBuildDir v p
-          systemIberty = systemCwd $ pathFor [packageBuildDir v p, "libiberty"]
-          compile _ = do
-            need [packageBuildPath v p]
-            path <- getEnv "PATH"
-            traced "looking up PATH for" $ do
-                        case path of
-                          Nothing -> putStrLn "Nothing"
-                          Just s -> putStrLn s
-            systemPD "./configure" $ cs ++ [ "--target", target
-                                           , "--prefix", prefix]
-            systemPD "make" ["all"]
-            systemPD "make" ["info"]
-            systemPD "sudo" ["make", "install"]
+compileRule :: Version -> Package -> [ConfigureOption] -> Action ()
+compileRule v p cs = do
+  let 
+      buildDir = (packageBuildDir v p) ++ "-build"
+      systemPD = command_ [Cwd $ buildDir, Env [("LD_LIBRARY_PATH",prefix++"/lib gmake")]]
+      systemBD = command_ [Cwd $ packageBuildDir v p]
+      configureScriptPath = "../" ++ (packageFolderName p) ++ "/configure"
+  need [packageConfigurePath v p]
+  system' "mkdir" ["-p", buildDir]
+  systemPD configureScriptPath $ cs ++ [ "--target", target
+                                       , "--prefix", prefix]
+  systemPD "printenv" []
+  systemPD "make" ["all"]
+  systemPD "make" ["info"]
+  systemPD "sudo" ["make", "install"]
+
+gmpRule :: Version -> Package -> Rules ()
+gmpRule v p = (packageProduct v p) *> \name -> do
+                compileRule v p [ "--enable-shared"
+                                , "--enable-static"
+                                , "--enable-fft"
+                                , "--enable-cxx"]
+
+mpfrRule :: Version -> Package -> Rules ()
+mpfrRule v p = (packageProduct v p) *> \name -> do
+                 compileRule v p [ "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
+                                 , "--with-gmp", prefix
+                                 , "--enable-static"
+                                 , "--enable-shared"]
+
+mpcRule :: Version -> Package -> Rules ()
+mpcRule v p = (packageProduct v p) *> \name -> do
+                compileRule v p [ "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
+                                , "--with-gmp", prefix
+                                , "--with-mpfr", prefix
+                                , "--enable-static"
+                                , "--enable-shared"]
+
+newlibRule :: Version -> Package -> Rules ()
+newlibRule v p = (packageProduct v p) *> \name -> do
+                   compileRule v p []
 
 gdbRule :: Version -> Package -> Rules ()
-gdbRule v p = compileRule v p []
+gdbRule v p = (packageProduct v p) *> \name -> do
+                compileRule v p []
 
 binutilsRule :: Version -> Package -> Rules ()
-binutilsRule v p = compileRule v p []
+binutilsRule v p = (packageProduct v p) *> \name -> do
+                     system' "echo" ["yay"]
+                     compileRule v p []
 
 gccRule :: Version -> Package -> Rules ()
-gccRule v p = compileRule v p
-              [ "--build", gccHost
-              , "--host",  gccHost
-              , "--with-gnu-as", prefix++"/bin/"++target++"-as"
-              , "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
-              , "--with-ar", prefix++"/bin/"++target++"-ar"
-              , "--verbose"
-              , "--enable-threads"
-              , "--disable-install-libiberty"
-              , "--enable-languages=c"]
+gccRule v p = (packageProduct v p) *> \name -> do
+                compileRule v p [ "--build", gccHost
+                                , "--host",  gccHost
+                                , "--with-gnu-as", prefix++"/bin/"++target++"-as"
+                                , "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
+--                                , "--with-ar", prefix++"/bin/"++target++"-ar"
+                                , "--verbose"
+                                , "--without-headers"
+                                , "--with-newlib"
+                                , "--disable-shared"
+                                , "--enable-static"
+                                , "--enable-ld"
+                                , "--with-gmp", prefix
+                                , "--with-mpc", prefix
+                                , "--with-mpfr", prefix
+--                                , "--disable-libssp"
+                                , "--disable-nls"
+                                , "--disable-libgomp"
+--                                , "--enable-multilib"
+--                                , "--enable-threads"
+                                , "--enable-languages=c"]
 
 mkDirRule :: FilePath -> Rules ()
 mkDirRule d = d *> mkdir
@@ -197,13 +231,21 @@ shakeIt conf = shakeArgs shakeOptions $ do
                      binutils = findPackage conf "binutils"
                      gcc = findPackage conf "gcc"
                      gdb = findPackage conf "gdb"
+                     newlib = findPackage conf "newlib"
+                     gmp = findPackage conf "gmp"
+                     mpfr = findPackage conf "mpfr"
+                     mpc = findPackage conf "mpc"
                  mkDirRules [pathFor ["build", show v]]
                  forM_ packagesWithPatches $ patchPackageRule v
                  forM_ diffs $ curlPackageRule v
                  -- individual package rules
-                 binutilsRule v binutils >> want [packageProduct v binutils]
+--                 newlibRule v newlib >> want [packageProduct v newlib]
                  gccRule v gcc >> want [packageProduct v gcc]
-                 gdbRule v gdb >> want [packageProduct v gdb]
+                 gmpRule v gmp >> want [packageProduct v gmp]
+                 mpfrRule v mpfr >> want [packageProduct v mpfr]
+                 mpcRule v mpc >> want [packageProduct v mpc]
+--                 binutilsRule v binutils >> want [packageProduct v binutils]
+--                 gdbRule v gdb >> want [packageProduct v gdb]
 
 pairSourceWithDiff :: [Package] -> Package -> (Package, Maybe Package)
 pairSourceWithDiff diffs source  = (source, maybeHead $ filter (match source) diffs)
