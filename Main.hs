@@ -90,9 +90,12 @@ quote s = "\"" ++ s ++ "\""
 packageBuildPath :: Version -> Package -> FilePath
 packageBuildPath v p = buildPath v $ show p
 
-buildDir v = pathFor ["build", v]
+buildDir :: Version -> FilePath
+buildDir v = pathFor ["build", show v]
 packageBuildDir :: Version -> Package -> FilePath
 packageBuildDir v p = buildPath v $ packageFolderName p
+packageConfigureDir :: Version -> Package -> FilePath
+packageConfigureDir v p = pathFor ["build", show v, (show p) ++ "-build"]
 
 -- packageConfigurePath :: Version -> Package -> FilePath
 -- packageConfigurePath v p = pathFor [packageBuildDir v p, "configure"]
@@ -110,15 +113,47 @@ untarPackageRule v p = (configurePackagePath v p) *> \name -> do
                          need [packageBuildPath v p]
                          command_ [Cwd $ buildDir v] "tar" ["-xf", show p]
 
-changelistPackagePath v p = pathFor [packageBuildDir v p, "Changelist.rtems"]
+changelistPackagePath v p = pathFor [packageProduct v p, "ChangeLog.rtems"]
 patchPackageRule :: Version -> (Package, Maybe Package) -> Rules ()
 patchPackageRule v (p, Nothing) = (changelistPackagePath v p) *> \name -> do
                                     need [configurePackagePath v p]
-                                    command_ [Cwd $ buildDir] "touch" ["Changelog.rtems"]
+                                    command_ [Cwd $ buildDir v] "touch" ["ChangeLog.rtems"]
 patchPackageRule v (p, Just diff) = (changelistPackagePath v p) *> \name -> do
                                       need [ configurePackagePath v p
                                            , packageBuildPath v diff]
                                       command_ [Cwd $ packageBuildDir v p] "patch" ["-i", patchFilePath, "-p1"]
+                                          where patchFilePath = pathFor ["..", show diff]
+
+makefilePackagePath v p = pathFor [packageBuildDir v p, "Makefile"]
+configurePackageRule :: Version -> Package -> [ConfigureOption] -> Rules ()
+configurePackageRule v p cs = (makefilePackagePath v p) *> \name -> do
+                                need [changelistPackagePath v p]
+                                let systemWD = command_ [Cwd $ packageConfigureDir v p]
+                                    configureScriptPath = pathFor ["..", packageFolderName p, "configure"]
+                                systemWD configureScriptPath cs
+
+configureGCCRule :: Version -> Package -> Rules ()
+configureGCCRule v p = configurePackageRule v p
+                       [ "--build", gccHost
+                       , "--host",  gccHost
+                       , "--target", target
+                       , "--prefix", prefix
+                       , "--with-gnu-as", prefix++"/bin/"++target++"-as"
+                       , "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
+                       --                                , "--with-ar", prefix++"/bin/"++target++"-ar"
+                       , "--verbose"
+                       , "--without-headers"
+                       , "--with-newlib"
+                       , "--disable-shared"
+                       , "--enable-static"
+                       , "--enable-ld"
+                       , "--disable-nls"
+                       , "--disable-libgomp"
+                       --                                , "--enable-multilib"
+                       --                                , "--enable-threads"
+                       , "--enable-languages=c"
+                       ]
+
 -- patchPackageRule v (p, d) = (changelistPackagePath v p) *> curlPackage
 --     where curlPackage _ = do
 --             let buildDir = pathFor ["build", show v]
@@ -152,11 +187,11 @@ compileRule v p cs = do
       systemPD = command_ [Cwd $ buildDir, Env [("LD_LIBRARY_PATH",prefix++"/lib gmake")]]
       systemBD = command_ [Cwd $ packageBuildDir v p]
       configureScriptPath = "../" ++ (packageFolderName p) ++ "/configure"
-  need [packageConfigurePath v p]
+  need [makefilePackagePath v p]
   system' "mkdir" ["-p", buildDir]
   -- systemPD configureScriptPath $ cs ++ [ "--target", target
   --                                      , "--prefix", prefix]
-  systemPD configureScriptPath cs
+  --systemPD configureScriptPath cs
   systemPD "printenv" []
   systemPD "make" ["all"]
   systemPD "make" ["info"]
@@ -169,9 +204,8 @@ gmpRule v p = (packageProduct v p) *> \name -> do
 --                                , "--target", target
                                 , "--enable-shared"
                                 , "--enable-static"
-                                , "--enable-fft"
+                                , "--enable-fft"]
 --                                , "--enable-cxx"
-                                , "CC", "gcc"]
 
 mpfrRule :: Version -> Package -> Rules ()
 mpfrRule v p = (packageProduct v p) *> \name -> do
@@ -203,29 +237,12 @@ binutilsRule v p = (packageProduct v p) *> \name -> do
 
 gccRule :: Version -> Package -> Rules ()
 gccRule v p = (packageProduct v p) *> \name -> do
-                compileRule v p [ "--build", gccHost
-                                , "--host",  gccHost
-                                , "--target", target
-                                , "--prefix", prefix
-                                , "--with-gnu-as", prefix++"/bin/"++target++"-as"
-                                , "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
---                                , "--with-ar", prefix++"/bin/"++target++"-ar"
-                                , "--verbose"
-                                , "--without-headers"
-                                , "--with-newlib"
-                                , "--disable-shared"
-                                , "--enable-static"
-                                , "--enable-ld"
-                                -- , "--with-gmp", prefix
-                                -- , "--with-mpc", prefix
-                                -- , "--with-mpfr", prefix
---                                , "--disable-libssp"
-                                , "--disable-nls"
-                                , "--disable-libgomp"
---                                , "--enable-multilib"
---                                , "--enable-threads"
-                                , "--enable-languages=c"
-                                , "CPP=\"gcc -E\""]
+                need [makefilePackagePath v p]
+                let systemWD = command_ [Cwd $ packageConfigureDir v p]
+                    configureScriptPath = pathFor ["..", packageFolderName p, "configure"]
+                systemWD "make" ["all"]
+                systemWD "make" ["install"]
+
 
 mkDirRule :: FilePath -> Rules ()
 mkDirRule d = d *> mkdir
@@ -265,7 +282,10 @@ shakeIt conf = shakeArgs shakeOptions $ do
                  forM_ packagesWithPatches $ patchPackageRule v
                  forM_ diffs $ curlPackageRule v
                  -- individual package rules
---                 newlibRule v newlib >> want [packageProduct v newlib]
+                 --                 newlibRule v newlib >> want [packageProduct v newlib]
+                 curlPackageRule v gcc
+                 untarPackageRule v gcc
+                 configureGCCRule v gcc
                  gccRule v gcc >> want [packageProduct v gcc]
                  -- mpcRule v mpc >> want [packageProduct v mpc]
                  -- mpfrRule v mpfr >> want [packageProduct v mpfr]
