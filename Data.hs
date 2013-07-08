@@ -22,6 +22,13 @@ packageVersion (RepoConf _ _ bv t) = bv
 packageVersionMatches :: Package -> Version -> Bool
 packageVersionMatches p v = packageVersion p == v
 
+data ConfigureOption = String
+data MetaPackage = MetaPackage
+                 { package :: Package
+                 , patch :: Maybe Package
+                 , configureOptions :: [ConfigureOption]
+                 }
+
 class Token a where
     tokenize :: a -> String
     genParser :: a -> GenParser Char st a
