@@ -95,7 +95,7 @@ buildDir v = pathFor ["build", show v]
 packageBuildDir :: Version -> Package -> FilePath
 packageBuildDir v p = buildPath v $ packageFolderName p
 packageConfigureDir :: Version -> Package -> FilePath
-packageConfigureDir v p = pathFor ["build", show v, (show p) ++ "-build"]
+packageConfigureDir v p = pathFor ["build", show v, (packageFolderName p) ++ "-build"]
 
 -- packageConfigurePath :: Version -> Package -> FilePath
 -- packageConfigurePath v p = pathFor [packageBuildDir v p, "configure"]
@@ -113,11 +113,11 @@ untarPackageRule v p = (configurePackagePath v p) *> \name -> do
                          need [packageBuildPath v p]
                          command_ [Cwd $ buildDir v] "tar" ["-xf", show p]
 
-changelistPackagePath v p = pathFor [packageProduct v p, "ChangeLog.rtems"]
+changelistPackagePath v p = pathFor [packageProduct v p, "ChangeLog"]
 patchPackageRule :: Version -> (Package, Maybe Package) -> Rules ()
 patchPackageRule v (p, Nothing) = (changelistPackagePath v p) *> \name -> do
                                     need [configurePackagePath v p]
-                                    command_ [Cwd $ buildDir v] "touch" ["ChangeLog.rtems"]
+                                    command_ [Cwd $ buildDir v] "touch" ["ChangeLog"]
 patchPackageRule v (p, Just diff) = (changelistPackagePath v p) *> \name -> do
                                       need [ configurePackagePath v p
                                            , packageBuildPath v diff]
@@ -128,9 +128,14 @@ makefilePackagePath v p = pathFor [packageBuildDir v p, "Makefile"]
 configurePackageRule :: Version -> Package -> [ConfigureOption] -> Rules ()
 configurePackageRule v p cs = (makefilePackagePath v p) *> \name -> do
                                 need [changelistPackagePath v p]
-                                let systemWD = command_ [Cwd $ packageConfigureDir v p]
+                                let configureDir = packageConfigureDir v p
+                                    systemWD = command_ [Cwd configureDir]
                                     configureScriptPath = pathFor ["..", packageFolderName p, "configure"]
-                                systemWD configureScriptPath cs
+                                system' "mkdir" ["-p", configureDir]
+                                systemWD (traceShow configureDir configureScriptPath) cs
+
+configureGeneralPackageRule v p = configurePackageRule v p [ "--target", target
+                                                           , "--prefix", prefix]
 
 configureGCCRule :: Version -> Package -> Rules ()
 configureGCCRule v p = configurePackageRule v p
@@ -154,32 +159,13 @@ configureGCCRule v p = configurePackageRule v p
                        , "--enable-languages=c"
                        ]
 
--- patchPackageRule v (p, d) = (changelistPackagePath v p) *> curlPackage
---     where curlPackage _ = do
---             let buildDir = pathFor ["build", show v]
---                 packageDir = packageBuildDir v p
---                 curl = system' "curl" ["-o", packageBuildPath v p
---                                       , packageRoute v p]
---                 untar = systemCwd buildDir "tar" ["-xf", show p]
---             case d of
---               Nothing -> do
---                      need [buildDir, packageBuildPath v p]
---                      --curl >> untar
---                      untar
---                      return ()
---               Just diff -> do
---                      need [ buildDir, packageBuildPath v diff
---                           , packageBuildPath v p]
---                      untar
---                      systemCwd packageDir "patch" ["-i", patchFilePath, "-p1"]
---                          where patchFilePath = pathFor ["..", show diff]
-
 -- these should be config options
 target  = "powerpc-rtems4.11-rtems"
-prefix  = "/home/nate/rtems"
+--prefix  = "/home/nate/rtems"
+prefix = "/Users/nate/Desktop/rtems"
 gccHost = "x86_64-unknown-linux-gnu/4.8.1"
 
-type ConfigureOption = String
+--type ConfigureOption = String
 compileRule :: Version -> Package -> [ConfigureOption] -> Action ()
 compileRule v p cs = do
   let 
@@ -232,15 +218,19 @@ gdbRule v p = (packageProduct v p) *> \name -> do
 
 binutilsRule :: Version -> Package -> Rules ()
 binutilsRule v p = (packageProduct v p) *> \name -> do
-                     system' "echo" ["yay"]
-                     compileRule v p []
+                     need [makefilePackagePath v p]
+                     let systemWD = command_ [Cwd $ packageConfigureDir v p]
+                         configureScriptPath = pathFor ["..", packageFolderName p, "configure"]
+                     systemWD "make" ["all"]
+                     systemWD "make" ["info"]
+                     systemWD "make" ["install"]
 
 gccRule :: Version -> Package -> Rules ()
 gccRule v p = (packageProduct v p) *> \name -> do
                 need [makefilePackagePath v p]
                 let systemWD = command_ [Cwd $ packageConfigureDir v p]
                     configureScriptPath = pathFor ["..", packageFolderName p, "configure"]
-                systemWD "make" ["all"]
+                systemWD "make" ["gcc-all"]
                 systemWD "make" ["install"]
 
 
@@ -286,11 +276,16 @@ shakeIt conf = shakeArgs shakeOptions $ do
                  curlPackageRule v gcc
                  untarPackageRule v gcc
                  configureGCCRule v gcc
-                 gccRule v gcc >> want [packageProduct v gcc]
+                 gccRule v gcc
+                 want [packageProduct v gcc]
                  -- mpcRule v mpc >> want [packageProduct v mpc]
                  -- mpfrRule v mpfr >> want [packageProduct v mpfr]
                  -- gmpRule v gmp >> want [packageProduct v gmp]
---                 binutilsRule v binutils >> want [packageProduct v binutils]
+                 curlPackageRule v binutils
+                 untarPackageRule v binutils
+                 configureGeneralPackageRule v binutils
+                 binutilsRule v binutils
+                 want [packageProduct v binutils]
 --                 gdbRule v gdb >> want [packageProduct v gdb]
 
 pairSourceWithDiff :: [Package] -> Package -> (Package, Maybe Package)

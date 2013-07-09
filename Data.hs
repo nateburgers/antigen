@@ -22,7 +22,7 @@ packageVersion (RepoConf _ _ bv t) = bv
 packageVersionMatches :: Package -> Version -> Bool
 packageVersionMatches p v = packageVersion p == v
 
-data ConfigureOption = String
+type ConfigureOption = String
 data MetaPackage = MetaPackage
                  { package :: Package
                  , patch :: Maybe Package
