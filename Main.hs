@@ -124,7 +124,7 @@ patchPackageRule v (p, Just diff) = (changelistPackagePath v p) *> \name -> do
                                       command_ [Cwd $ packageBuildDir v p] "patch" ["-i", patchFilePath, "-p1"]
                                           where patchFilePath = pathFor ["..", show diff]
 
-makefilePackagePath v p = pathFor [packageBuildDir v p, "Makefile"]
+makefilePackagePath v p = pathFor [packageConfigureDir v p, "Makefile"]
 configurePackageRule :: Version -> Package -> [ConfigureOption] -> Rules ()
 configurePackageRule v p cs = (makefilePackagePath v p) *> \name -> do
                                 need [changelistPackagePath v p]
@@ -143,26 +143,26 @@ configureGCCRule v p = configurePackageRule v p
                        , "--host",  gccHost
                        , "--target", target
                        , "--prefix", prefix
-                       , "--with-gnu-as", prefix++"/bin/"++target++"-as"
-                       , "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
+--                       , "--with-gnu-as", prefix++"/bin/"++target++"-as"
+--                       , "--with-gnu-ld", prefix++"/bin/"++target++"-ld"
                        --                                , "--with-ar", prefix++"/bin/"++target++"-ar"
                        , "--verbose"
                        , "--without-headers"
-                       , "--with-newlib"
-                       , "--disable-shared"
-                       , "--enable-static"
-                       , "--enable-ld"
+--                       , "--with-newlib"
+--                       , "--disable-shared"
+--                       , "--enable-static"
+--                       , "--enable-ld"
                        , "--disable-nls"
-                       , "--disable-libgomp"
+--                       , "--disable-libgomp"
                        --                                , "--enable-multilib"
                        --                                , "--enable-threads"
-                       , "--enable-languages=c"
+                       , "--enable-languages=c,c++"
                        ]
 
 -- these should be config options
 target  = "powerpc-rtems4.11-rtems"
---prefix  = "/home/nate/rtems"
-prefix = "/Users/nate/Desktop/rtems"
+prefix  = "/home/nate/rtems"
+--prefix = "/Users/nate/Desktop/rtems"
 gccHost = "x86_64-unknown-linux-gnu/4.8.1"
 
 --type ConfigureOption = String
@@ -230,8 +230,10 @@ gccRule v p = (packageProduct v p) *> \name -> do
                 need [makefilePackagePath v p]
                 let systemWD = command_ [Cwd $ packageConfigureDir v p]
                     configureScriptPath = pathFor ["..", packageFolderName p, "configure"]
-                systemWD "make" ["gcc-all"]
-                systemWD "make" ["install"]
+                systemWD "make" ["all-gcc"]
+                systemWD "make" ["all-target-libgcc"]
+                systemWD "make" ["install-gcc"]
+                systemWD "make" ["install-target-libgcc"]
 
 
 mkDirRule :: FilePath -> Rules ()
