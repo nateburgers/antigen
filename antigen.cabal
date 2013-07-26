@@ -53,5 +53,5 @@ executable antigen
   -- other-modules:       
   
   -- Other library packages from which modules are imported.
-  build-depends:       base >=4.5, hxt ==9.3.*, mtl ==2.1.*, MaybeT ==0.1.*, HTTP ==4000.2.*, network ==2.4.*, shake ==0.10.*, parsec ==3.1.*
+  build-depends:       base >=4.5, hxt ==9.3.*, mtl ==2.1.*, MaybeT ==0.1.*, HTTP ==4000.2.*, network ==2.4.*, shake ==0.10.*, parsec ==3.1.*, shelly ==0.9.*
   

@@ -9,18 +9,6 @@ data Package = Source Title Version TarFormat
              | Diff Title Version Version BuildDate
              | RepoConf Version BuildDate Version TarFormat
 
-packageFolderName :: Package -> String
-packageFolderName (Source t v tar) = foldCat [show t, "-", show v]
-packageFolderName (RepoConf v b bv t) = foldCat ["rtems-", show v, "-repo-conf-0.", show b, ".", show bv]
-packageFolderName _ = ""
-
-packageVersion :: Package -> Version
-packageVersion (Source _ v _) = v
-packageVersion (Diff _ v _ _) = v
-packageVersion (RepoConf _ _ bv t) = bv
-
-packageVersionMatches :: Package -> Version -> Bool
-packageVersionMatches p v = packageVersion p == v
 
 type ConfigureOption = String
 data MetaPackage = MetaPackage
