@@ -108,13 +108,18 @@ buildDir v = pathFor ["build", text v]
 -- these should be config options
 target  = "powerpc-rtems4.11-rtems"
 prefix  = "/home/nate/rtems"
-gccHost = "x86_64-unknown-linux-gnu/4.8.1"
+compileHost = "x86_64-unknown-linux-gnu/4.8.1"
 
 type PackageTitle = String
 findPackage :: RtemsConf -> PackageTitle -> Package
 findPackage conf title = grabPackage $ head $ filter matchBinutils $ packages conf
     where matchBinutils ((Source (Title title') _ _), _) = title' == title
           grabPackage (p, d) = p
+
+packageTitle :: Package -> LT.Text
+packageTitle (Source (Title t) _ _) = LT.pack t
+packageTitle (Diff (Title t) _ _ _) = LT.pack t
+packageTitle (RepoConf _ _ _ _) = LT.pack "rtems"
 
 packageFolderName :: Package -> LT.Text
 packageFolderName (Source t v tar) = LT.concat [text t, "-", text v]
@@ -243,6 +248,23 @@ patch version (package, possibleDiff) =
 patchAll :: GroupOperation
 patchAll (RtemsConf version packages) = vshell $ mapM_ (patch version) packages
 
+type TextTitle = LT.Text
+globalConfigurationOptions :: [LT.Text]
+globalConfigurationOptions = [ "--prefix", prefix
+                             , "--target", target
+                             , "--verbose"
+                             ]
+configurationOptions :: TextTitle -> [LT.Text]
+configurationOptions "gcc" = [ "--with-newlib"
+                             , "--enable-threads"
+                             , "--enable-languages=c,c++"
+                             -- , "--with-gmp=../gmp-4.3.2"
+                             -- , "--with-mpfr=../mpfr-2.4.2"
+                             -- , "--with-mpc=../mpc-0.8.1"
+                             , "--host", compileHost
+                             ]
+configurationOptions _ = []
+
 configure :: PackageOperation
 configure version package =
     vshell $ do
@@ -251,10 +273,25 @@ configure version package =
       makefileGenerated <- test_f $ fromText "Makefile"
       if makefileGenerated
       then return ()
-      else run_ (fromText $ "../" +++ (packageFolderName package) +++ "/configure") []
+      else run_ (fromText configureScriptPath) configureOptions
+          where configureScriptPath = "../" +++ (packageFolderName package) +++ "/configure"
+                configureOptions = globalConfigurationOptions ++
+                                   (configurationOptions $ packageTitle package)
 
 configureAll :: GroupOperation
 configureAll (RtemsConf version packages) = vshell $ mapM_ (configure version . fst) packages
+
+
+
+linkTo :: Version -> Package -> Package -> ShIO ()
+linkTo version mainPackage linkPackage =
+    vshell $ do
+      chPackageDir version mainPackage
+      linked <- test_d . fromText $ packageTitle linkPackage 
+      if linked
+      then return ()
+      else run_ "ln" ["-s", linkPath, packageTitle linkPackage]
+          where linkPath = "../" +++ (packageFolderName linkPackage)
 
 desiredPackages :: [String]
 desiredPackages = ["binutils", "gcc", "gdb", "newlib", "gmp", "mpc", "mpfr"]
@@ -272,11 +309,21 @@ main :: IO ()
 main = do
   configurations <- scrapeRtemsRepo
   let conf = confWithDesiredPackages (last configurations) desiredPackages
+      find = findPackage conf
+      link = linkTo $ version conf
+      binutils = find "binutils"
+      gcc = find "gcc"
+      gdb = find "gdb"
+      newlib = find "newlib"
+      gmp = find "gmp"
+      mpc = find "mpc"
+      mpfr = find "mpfr"
   shelly . verbosely $ do
          --run_ "mkdir" ["-p", buildDir $ version conf]
          mkDirGuard . buildDir $ version conf
          curlAll conf
          untarAll conf
          patchAll conf
+         mapM_ ((link gcc) . find) ["gmp", "mpfr", "mpc"]
          configureAll $ confWithDesiredPackages conf compiledPackages
-
+         
