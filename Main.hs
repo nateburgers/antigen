@@ -108,7 +108,7 @@ buildDir v = pathFor ["build", text v]
 -- these should be config options
 target  = "powerpc-rtems4.11-rtems"
 prefix  = "/home/nate/rtems"
-compileHost = "x86_64-unknown-linux-gnu/4.8.1"
+compileHost = "x86_64-linux-gnu/4.6.3"
 
 type PackageTitle = String
 findPackage :: RtemsConf -> PackageTitle -> Package
@@ -261,7 +261,8 @@ configurationOptions "gcc" = [ "--with-newlib"
                              -- , "--with-gmp=../gmp-4.3.2"
                              -- , "--with-mpfr=../mpfr-2.4.2"
                              -- , "--with-mpc=../mpc-0.8.1"
-                             , "--host", compileHost
+                             --, "--host", target
+                             , "--without-nls"
                              ]
 configurationOptions _ = []
 
@@ -281,7 +282,20 @@ configure version package =
 configureAll :: GroupOperation
 configureAll (RtemsConf version packages) = vshell $ mapM_ (configure version . fst) packages
 
+makeTargets :: TextTitle -> [LT.Text]
+makeTargets "gcc" = ["all-gcc", "all-target-libgcc", "install-gcc", "install-target-gcc"]
+makeTargets "binutils" = ["all", "install"]
+makeTargets _ = []
 
+make :: PackageOperation
+make version package =
+    vshell $ do
+      chPackageBuildDir version package
+      appendToPath . fromText $ prefix +++ "/bin"
+      run_ "make" $ ["clean"] ++ (makeTargets . packageTitle $ package)
+
+makeAll :: GroupOperation
+makeAll (RtemsConf version packages) = vshell $ mapM_ (make version . fst ) packages
 
 linkTo :: Version -> Package -> Package -> ShIO ()
 linkTo version mainPackage linkPackage =
@@ -290,8 +304,8 @@ linkTo version mainPackage linkPackage =
       linked <- test_d . fromText $ packageTitle linkPackage 
       if linked
       then return ()
-      else run_ "ln" ["-s", linkPath, packageTitle linkPackage]
-          where linkPath = "../" +++ (packageFolderName linkPackage)
+      else run_ "ln" ["-s", linkPath, "."]
+          where linkPath = "../" +++ (packageFolderName linkPackage) +++ "/" +++ (packageTitle linkPackage) 
 
 desiredPackages :: [String]
 desiredPackages = ["binutils", "gcc", "gdb", "newlib", "gmp", "mpc", "mpfr"]
@@ -324,6 +338,7 @@ main = do
          curlAll conf
          untarAll conf
          patchAll conf
-         mapM_ ((link gcc) . find) ["gmp", "mpfr", "mpc"]
+         --mapM_ ((link gcc) . find) ["gmp", "mpfr", "mpc"]
+         link gcc newlib
          configureAll $ confWithDesiredPackages conf compiledPackages
-         
+         makeAll $ confWithDesiredPackages conf ["binutils", "gcc"]
