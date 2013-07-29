@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, ExtendedDefaultRules, DoAndIfThenElse, DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedStrings, ExtendedDefaultRules, DoAndIfThenElse, DeriveDataTypeable, QuasiQuotes #-}
 
 module Main where
 import Prelude as P hiding (FilePath)
@@ -27,9 +27,13 @@ infixr 9 +++
 text :: Show a => a -> LT.Text
 text = LT.pack . show
 
+rtemsRoot :: LT.Text
 rtemsRoot = "http://www.rtems.com/ftp/pub/rtems/SOURCES"
 
+rtemsPage :: LT.Text -> LT.Text
 rtemsPage s = LT.concat [rtemsRoot, "/", s, "/"]
+
+rtemsRoute :: [LT.Text] -> LT.Text
 rtemsRoute subdirs = LT.intercalate "/" (rtemsRoot:subdirs)
 
 openURL url = case parseURI url of
@@ -75,6 +79,10 @@ data RtemsConf = RtemsConf
                { version :: Version
                , packages :: [(Package, Maybe Package)]
                } deriving Show
+data TargettedConf = TargettedConf
+                   { tConfConf :: RtemsConf
+                   , tConfTarget :: LT.Text
+                   } deriving Show
 
 confSources :: RtemsConf -> [Package]
 confSources = (map fst) . packages
@@ -91,15 +99,15 @@ buildDir v = pathFor ["build", text v]
 rtemsDir v = pathFor ["build", text v, "rtems"]
 rtemsBuildDir v = pathFor ["build", text v, "rtems-build"]
 
--- these should be config options
+-- FIXME: evil hard-coded values from lazyness
 target  = "arm-rtems4.11-rtems"
-prefix  = "/home/nate/rtems"
+prefix  = "~/rtems"
 compileHost = "x86_64-linux-gnu/4.6.3"
 
 type PackageTitle = String
 findPackage :: RtemsConf -> PackageTitle -> Package
-findPackage conf title = grabPackage $ head $ filter matchBinutils $ packages conf
-    where matchBinutils ((Source (Title title') _ _), _) = title' == title
+findPackage conf title = grabPackage $ head $ filter matchPackage $ packages conf
+    where matchPackage ((Source (Title title') _ _), _) = title' == title
           grabPackage (p, d) = p
 
 packageTitle :: Package -> LT.Text
@@ -149,9 +157,6 @@ scrapeRtemsRepo = do
   let versions = extractVersionLinks links
   mapM scrapeRtemsVersion versions
          
-traceShow' :: Show a => a -> a
-traceShow' a = traceShow a a
-
 stringPath :: String -> FilePath
 stringPath = fromText . LT.pack
 
@@ -295,7 +300,6 @@ rtemsVersionBranch (Version [4, 10]) = "4.10"
 rtemsVersionBranch (Version [4, 9]) = "4.9"
 rtemsVersionBranch _ = "master"
 
--- FIXME: currently only builds the 4.11 HEAD from github
 compileRtems :: Version -> ShIO ()
 compileRtems version =
     vshell $ do
@@ -329,11 +333,9 @@ mkDirGuard directory = vshell $ do
                          then return ()
                          else run_ "mkdir" ["-p", directory]
 
-build :: IO ()
-build = do
-  configurations <- scrapeRtemsRepo
-  let conf = confWithDesiredPackages (last configurations) desiredPackages
-      find = findPackage conf
+build :: RtemsConf -> IO ()
+build conf = do
+  let find = findPackage conf
       link = linkTo $ version conf
   shelly . verbosely $ do
          mkDirGuard . buildDir $ version conf
@@ -362,6 +364,18 @@ instance CL.Attributes Options where
 instance CL.RecordCommand Options where
     mode_summary _ = "Configuration-Less RTEMS Source Builder."
 
+-- FIXME: implicitly cascade case..of Maybe's with a MonadT for an option with error texts
 main :: IO ()
 main = CL.getArgs >>= CL.executeR Options {} >>= \options -> do
-         putStrLn (rversion options)
+         let v = readParser versionParser $ rversion options
+         case v of
+           Nothing -> do
+                  putStrLn $ LT.unpack [lt|Could not parse version #{rversion options}|]
+           Just properVersion -> do
+               configurations <- scrapeRtemsRepo
+               let versionedConfig = maybeHead $ filter (matchVersion properVersion) configurations
+                       where matchVersion v (RtemsConf version _) = version == v 
+               case versionedConfig of
+                 Nothing -> do
+                   putStrLn $ LT.unpack [lt|Could not find an RTEMS configuration with version #{text properVersion}|]
+                 Just conf -> build conf
