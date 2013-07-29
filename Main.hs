@@ -87,26 +87,11 @@ pathFor :: [LT.Text] -> LT.Text
 pathFor = LT.intercalate "/"
 
 buildDir v = pathFor ["build", text v]
-
--- configureGeneralPackageRule v p = configurePackageRule v p [ "--target", target
---                                                            , "--prefix", prefix]
-
--- configureGCCRule :: Version -> Package -> Rules ()
--- configureGCCRule v p = configurePackageRule v p
---                        [ "--build", gccHost
---                        , "--host",  gccHost
---                        , "--target", target
---                        , "--prefix", prefix
---                        , "--verbose"
---                        , "--without-headers"
---                        , "--disable-nls"
---                        , "--enable-languages=c,c++"
---                        ]
-
--- GCC: make all-gcc, install-gcc, all-libgcc, install-libgcc
+rtemsDir v = pathFor ["build", text v, "rtems"]
+rtemsBuildDir v = pathFor ["build", text v, "rtems-build"]
 
 -- these should be config options
-target  = "powerpc-rtems4.11-rtems"
+target  = "arm-rtems4.11-rtems"
 prefix  = "/home/nate/rtems"
 compileHost = "x86_64-linux-gnu/4.6.3"
 
@@ -166,7 +151,6 @@ scrapeRtemsRepo = do
 traceShow' :: Show a => a -> a
 traceShow' a = traceShow a a
 
--- running the scripts
 stringPath :: String -> FilePath
 stringPath = fromText . LT.pack
 
@@ -258,10 +242,6 @@ configurationOptions :: TextTitle -> [LT.Text]
 configurationOptions "gcc" = [ "--with-newlib"
                              , "--enable-threads"
                              , "--enable-languages=c,c++"
-                             -- , "--with-gmp=../gmp-4.3.2"
-                             -- , "--with-mpfr=../mpfr-2.4.2"
-                             -- , "--with-mpc=../mpc-0.8.1"
-                             --, "--host", target
                              , "--without-nls"
                              ]
 configurationOptions _ = []
@@ -283,8 +263,9 @@ configureAll :: GroupOperation
 configureAll (RtemsConf version packages) = vshell $ mapM_ (configure version . fst) packages
 
 makeTargets :: TextTitle -> [LT.Text]
-makeTargets "gcc" = ["all-gcc", "all-target-libgcc", "install-gcc", "install-target-gcc"]
-makeTargets "binutils" = ["all", "install"]
+makeTargets "gcc" = ["all", "info", "install"]
+makeTargets "binutils" = ["all", "info", "install"]
+makeTargets "gdb" = ["all", "info", "install"]
 makeTargets _ = []
 
 make :: PackageOperation
@@ -306,6 +287,29 @@ linkTo version mainPackage linkPackage =
       then return ()
       else run_ "ln" ["-s", linkPath, "."]
           where linkPath = "../" +++ (packageFolderName linkPackage) +++ "/" +++ (packageTitle linkPackage) 
+
+-- FIXME: currently only builds the 4.11 HEAD from github
+compileRtems :: Version -> ShIO ()
+compileRtems version =
+    vshell $ do
+      chBuildDir version
+      appendToPath . fromText $ prefix +++ "/bin"
+      appendToPath . fromText $ prefix +++ "/" +++ target +++ "/bin"
+      run_ "git" ["clone", "https://github.com/RTEMS/rtems"]
+      -- -- ERROR: 4.11 does not exist in the github branches yet
+      -- cd . fromText $ "rtems"
+      -- run_ "git" ["checkout", text version]
+      -- cd . fromText $ ".."
+      run_ "rtems/bootstrap" []
+      run_ "mkdir" ["-p", "rtems-build"]
+      cd . fromText $ "rtems-build"
+      run_ "../rtems/configure" [ "--target", target
+                                , "--prefix", prefix
+                                , "--enable-rtemsbsp=sis"
+                                , "--enable-tests=samples"
+                                , "--disable-posix"]
+      run_ "make" []
+      run_ "make" ["install"]
 
 desiredPackages :: [String]
 desiredPackages = ["binutils", "gcc", "gdb", "newlib", "gmp", "mpc", "mpfr"]
@@ -333,12 +337,12 @@ main = do
       mpc = find "mpc"
       mpfr = find "mpfr"
   shelly . verbosely $ do
-         --run_ "mkdir" ["-p", buildDir $ version conf]
          mkDirGuard . buildDir $ version conf
          curlAll conf
          untarAll conf
          patchAll conf
-         --mapM_ ((link gcc) . find) ["gmp", "mpfr", "mpc"]
          link gcc newlib
          configureAll $ confWithDesiredPackages conf compiledPackages
-         makeAll $ confWithDesiredPackages conf ["binutils", "gcc"]
+         --makeAll $ confWithDesiredPackages conf ["binutils", "gcc", "gdb"]
+         compileRtems $ version conf
+         
