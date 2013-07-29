@@ -1,5 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ExtendedDefaultRules #-}
+{-# LANGUAGE OverloadedStrings, ExtendedDefaultRules, DoAndIfThenElse, DeriveDataTypeable #-}
 
 module Main where
 import Prelude as P hiding (FilePath)
@@ -9,6 +8,8 @@ import Text.XML.HXT.Core hiding (trace, (+++))
 import Data.List (group)
 import Data.Char
 import Data.Maybe
+import Text.Shakespeare.Text (lt)
+import qualified System.Console.CmdLib as CL
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Maybe
@@ -288,6 +289,12 @@ linkTo version mainPackage linkPackage =
       else run_ "ln" ["-s", linkPath, "."]
           where linkPath = "../" +++ (packageFolderName linkPackage) +++ "/" +++ (packageTitle linkPackage) 
 
+rtemsVersionBranch :: Version -> LT.Text
+rtemsVersionBranch (Version [4, 11]) = "master"
+rtemsVersionBranch (Version [4, 10]) = "4.10"
+rtemsVersionBranch (Version [4, 9]) = "4.9"
+rtemsVersionBranch _ = "master"
+
 -- FIXME: currently only builds the 4.11 HEAD from github
 compileRtems :: Version -> ShIO ()
 compileRtems version =
@@ -296,10 +303,9 @@ compileRtems version =
       appendToPath . fromText $ prefix +++ "/bin"
       appendToPath . fromText $ prefix +++ "/" +++ target +++ "/bin"
       run_ "git" ["clone", "https://github.com/RTEMS/rtems"]
-      -- -- ERROR: 4.11 does not exist in the github branches yet
-      -- cd . fromText $ "rtems"
-      -- run_ "git" ["checkout", text version]
-      -- cd . fromText $ ".."
+      cd . fromText $ "rtems"
+      run_ "git" ["checkout", rtemsVersionBranch version]
+      cd . fromText $ ".."
       run_ "rtems/bootstrap" []
       run_ "mkdir" ["-p", "rtems-build"]
       cd . fromText $ "rtems-build"
@@ -323,26 +329,39 @@ mkDirGuard directory = vshell $ do
                          then return ()
                          else run_ "mkdir" ["-p", directory]
 
-main :: IO ()
-main = do
+build :: IO ()
+build = do
   configurations <- scrapeRtemsRepo
   let conf = confWithDesiredPackages (last configurations) desiredPackages
       find = findPackage conf
       link = linkTo $ version conf
-      binutils = find "binutils"
-      gcc = find "gcc"
-      gdb = find "gdb"
-      newlib = find "newlib"
-      gmp = find "gmp"
-      mpc = find "mpc"
-      mpfr = find "mpfr"
   shelly . verbosely $ do
          mkDirGuard . buildDir $ version conf
          curlAll conf
          untarAll conf
          patchAll conf
-         link gcc newlib
+         link (find "gcc") (find "newlib")
          configureAll $ confWithDesiredPackages conf compiledPackages
-         --makeAll $ confWithDesiredPackages conf ["binutils", "gcc", "gdb"]
+         makeAll $ confWithDesiredPackages conf ["binutils", "gcc", "gdb"]
          compileRtems $ version conf
-         
+  
+data Options = Options
+             { rversion :: String
+             , rtarget :: String
+             , rprefix :: String
+             } deriving (CL.Typeable, CL.Data, Eq)
+instance CL.Attributes Options where
+    attributes _ = CL.group "Options" [ rversion CL.%> [ CL.Help "RTEMS version to install."
+                                                       , CL.ArgHelp "[4.11|4.10|4.9]"
+                                                       , CL.Default "4.11" ]
+                                      , rtarget CL.%> [ CL.Help "Target platform."
+                                                      , CL.ArgHelp "[i386|arm|powerpc...]"
+                                                      , CL.Default "i386" ]
+                                      , rprefix CL.%> [ CL.Help "Install Location." ]
+                                      ]
+instance CL.RecordCommand Options where
+    mode_summary _ = "Configuration-Less RTEMS Source Builder."
+
+main :: IO ()
+main = CL.getArgs >>= CL.executeR Options {} >>= \options -> do
+         putStrLn (rversion options)
